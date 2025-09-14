@@ -3,6 +3,7 @@ const cors = require("cors");
 const helmet = require("helmet");
 const morgan = require("morgan");
 const bodyParser = require("body-parser");
+const multer = require("multer");
 require("dotenv").config();
 
 // DATABASE CONFIGURATION
@@ -18,10 +19,23 @@ app.use(morgan("combined"));
 app.use(bodyParser.json({ limit: "10mb" }));
 app.use(bodyParser.urlencoded({ extended: true, limit: "10mb" }));
 
-// Routes
+// MULTER CONFIG FOR FILE UPLOADS
+const upload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 5 * 1024 * 1024 }, // 5MB
+});
+
+// MULER INSTANCE
+app.use((req, res, next) => {
+  req.upload = upload;
+  next();
+});
+
+// BOOKS ROUTE
 app.use('/api/books', require('./routes/books'));
-// app.use('/api/research', require('./routes/research'));
-// app.use('/api/dashboard', require('./routes/dashboard'));
+
+// RESEARCH ROUTE
+app.use('/api/research-papers', require('./routes/research_papers'));
 
 // ROOT ROUTE
 app.get("/", (req, res) => {
