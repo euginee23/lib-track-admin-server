@@ -204,12 +204,12 @@ router.post('/add', async (req, res) => {
 
     // GENERATE QR CODE
     const qrData = `ResearchPaperID:${researchPaperId}`;
-    const qrCodeImage = await QRCode.toDataURL(qrData);
+    const qrCodeBuffer = await QRCode.toBuffer(qrData);
 
     // UPDATE RESEARCH PAPER WITH QR CODE
     await pool.execute(
       'UPDATE research_papers SET research_paper_qr = ? WHERE research_paper_id = ?',
-      [qrCodeImage, researchPaperId]
+      [qrCodeBuffer, researchPaperId]
     );
 
     // AUTHORS

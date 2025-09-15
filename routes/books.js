@@ -392,7 +392,6 @@ router.post("/scan", async (req, res) => {
       });
     }
 
-    // Parse QR data format: "BookID:123-No:1"
     const qrPattern = /^BookID:(\d+)-No:(\d+)$/;
     const match = qrData.match(qrPattern);
 
@@ -407,7 +406,6 @@ router.post("/scan", async (req, res) => {
     const bookId = parseInt(match[1]);
     const bookNumber = parseInt(match[2]);
 
-    // Fetch book details
     const [books] = await pool.execute(
       `
       SELECT 
@@ -452,12 +450,10 @@ router.post("/scan", async (req, res) => {
 
     const book = books[0];
 
-    // Convert book_cover buffer to base64 if it exists
     if (book.book_cover && Buffer.isBuffer(book.book_cover)) {
       book.book_cover = book.book_cover.toString('base64');
     }
 
-    // Convert book_qr buffer to base64 if it exists
     if (book.book_qr && Buffer.isBuffer(book.book_qr)) {
       book.book_qr = book.book_qr.toString('base64');
     }
