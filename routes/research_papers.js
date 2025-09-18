@@ -68,12 +68,24 @@ router.get('/shelf-locations', async (req, res) => {
 // GET ALL RESEARCH PAPERS
 router.get('/', async (req, res) => {
   try {
+    const { ids } = req.query;
+    
+    let whereClause = '';
+    let queryParams = [];
+    
+    if (ids) {
+      const idArray = ids.split(',').map(id => id.trim());
+      whereClause = 'WHERE rp.research_paper_id IN (' + idArray.map(() => '?').join(',') + ')';
+      queryParams = idArray;
+    }
+
     const [papers] = await pool.execute(`
       SELECT 
         rp.research_paper_id,
         rp.research_title,
         rp.year_publication,
         rp.research_abstract,
+        rp.research_paper_qr,
         rp.created_at,
         d.department_name,
         GROUP_CONCAT(ra.author_name) AS authors,
@@ -83,14 +95,21 @@ router.get('/', async (req, res) => {
       LEFT JOIN departments d ON rp.department_id = d.department_id
       LEFT JOIN research_author ra ON rp.research_paper_id = ra.research_paper_id
       LEFT JOIN book_shelf_location bs ON rp.book_shelf_loc_id = bs.book_shelf_loc_id
+      ${whereClause}
       GROUP BY rp.research_paper_id
       ORDER BY rp.research_paper_id DESC
-    `);
+    `, queryParams);
+
+    // CONVERT QR CODE BUFFER TO BASE64 STRING
+    const formattedPapers = papers.map(paper => ({
+      ...paper,
+      research_paper_qr: paper.research_paper_qr ? paper.research_paper_qr.toString('base64') : null
+    }));
 
     res.status(200).json({
       success: true,
-      count: papers.length,
-      data: papers
+      count: formattedPapers.length,
+      data: formattedPapers
     });
   } catch (error) {
     console.error('Error fetching research papers:', error);
@@ -111,6 +130,7 @@ router.get('/:id', async (req, res) => {
         rp.research_title,
         rp.year_publication,
         rp.research_abstract,
+        rp.research_paper_qr,
         rp.created_at,
         d.department_name,
         GROUP_CONCAT(ra.author_name) AS authors,
@@ -132,9 +152,16 @@ router.get('/:id', async (req, res) => {
       });
     }
 
+    // COVERT QR CODE BUFFER TO BASE64 STRING
+    const paper = papers[0];
+    const formattedPaper = {
+      ...paper,
+      research_paper_qr: paper.research_paper_qr ? paper.research_paper_qr.toString('base64') : null
+    };
+
     res.status(200).json({
       success: true,
-      data: papers[0]
+      data: formattedPaper
     });
   } catch (error) {
     console.error('Error fetching research paper:', error);
