@@ -37,6 +37,9 @@ app.use('/api/books', require('./routes/books'));
 // RESEARCH ROUTE
 app.use('/api/research-papers', require('./routes/research_papers'));
 
+// SETTINGS ROUTE
+app.use('/api/settings', require('./routes/settings'));
+
 // ROOT ROUTE
 app.get("/", (req, res) => {
   res.json({

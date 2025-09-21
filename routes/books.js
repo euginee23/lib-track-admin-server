@@ -265,44 +265,65 @@ router.post("/add", (req, res) => {
 });
 
 // UPDATE BOOK ROUTE
-router.put("/:id", async (req, res) => {
+router.put("/:batch_registration_key", async (req, res) => {
   try {
-    const bookId = req.params.id;
+    const batchRegistrationKey = req.params.batch_registration_key;
     const {
+      book_title,
       bookTitle,
+      book_cover,
       bookCover,
+      book_qr,
       bookQR,
+      book_edition,
       bookEdition,
+      book_year,
       bookYear,
+      book_price,
       bookPrice,
+      book_donor,
       bookDonor,
       genre,
       publisher,
       author,
+      shelf_column,
       shelfColumn,
+      shelf_row,
       shelfRow,
     } = req.body;
 
-    // Get the existing book to check if it exists
-    const [bookCheck] = await pool.execute("SELECT * FROM books WHERE id = ?", [
-      bookId,
-    ]);
+    // Use either format (underscore or camelCase)
+    const finalBookTitle = book_title || bookTitle;
+    const finalBookCover = book_cover || bookCover;
+    const finalBookQR = book_qr || bookQR;
+    const finalBookEdition = book_edition || bookEdition;
+    const finalBookYear = book_year || bookYear;
+    const finalBookPrice = book_price || bookPrice;
+    const finalBookDonor = book_donor || bookDonor;
+    const finalShelfColumn = shelf_column || shelfColumn;
+    const finalShelfRow = shelf_row || shelfRow;
 
-    if (bookCheck.length === 0) {
+    // Get the existing books to check if they exist
+    const [booksCheck] = await pool.execute(
+      "SELECT * FROM books WHERE batch_registration_key = ?",
+      [batchRegistrationKey]
+    );
+
+    if (booksCheck.length === 0) {
       return res.status(404).json({
         success: false,
-        message: "Book not found",
+        message: "Books not found for the given batch registration key",
       });
     }
 
-    const existing = bookCheck[0];
+    const existing = booksCheck[0];
 
     // Update genre if provided
     let genreId = existing.book_genre_id;
     if (genre) {
       const [genreResult] = await pool.execute(
-        "UPDATE book_genre SET book_genre = ?, updated_at = ? WHERE id = ?",
-        [genre, new Date(), genreId]
+        "UPDATE book_genre SET book_genre = ? WHERE book_genre_id = ?",
+        [genre, genreId]
       );
     }
 
@@ -310,8 +331,8 @@ router.put("/:id", async (req, res) => {
     let publisherId = existing.book_publisher_id;
     if (publisher) {
       const [publisherResult] = await pool.execute(
-        "UPDATE book_publisher SET publisher = ?, updated_at = ? WHERE id = ?",
-        [publisher, new Date(), publisherId]
+        "UPDATE book_publisher SET publisher = ? WHERE book_publisher_id = ?",
+        [publisher, publisherId]
       );
     }
 
@@ -319,50 +340,66 @@ router.put("/:id", async (req, res) => {
     let authorId = existing.book_author_id;
     if (author) {
       const [authorResult] = await pool.execute(
-        "UPDATE book_author SET book_author = ?, updated_at = ? WHERE id = ?",
-        [author, new Date(), authorId]
+        "UPDATE book_author SET book_author = ? WHERE book_author_id = ?",
+        [author, authorId]
       );
     }
 
     // Update shelf location if provided
     let shelfLocationId = existing.book_shelf_location_id;
-    if (shelfColumn && shelfRow) {
+    if (finalShelfColumn && finalShelfRow) {
       const [shelfResult] = await pool.execute(
-        "UPDATE book_shelf_location SET shelf_column = ?, shelf_row = ?, updated_at = ? WHERE id = ?",
-        [shelfColumn, shelfRow, new Date(), shelfLocationId]
+        "UPDATE book_shelf_location SET shelf_column = ?, shelf_row = ? WHERE book_shelf_loc_id = ?",
+        [finalShelfColumn, finalShelfRow, shelfLocationId]
       );
     }
 
-    // Update the book
-    const [bookResult] = await pool.execute(
-      `UPDATE books SET 
-        book_title = COALESCE(?, book_title),
-        book_cover = COALESCE(?, book_cover),
-        book_qr = COALESCE(?, book_qr),
-        book_edition = COALESCE(?, book_edition),
-        book_year = COALESCE(?, book_year),
-        book_price = COALESCE(?, book_price),
-        book_donor = COALESCE(?, book_donor),
-        updated_at = ?
-      WHERE id = ?`,
-      [
-        safe(bookTitle),
-        safe(bookCover),
-        safe(bookQR),
-        safe(bookEdition),
-        safe(bookYear),
-        safe(bookPrice),
-        safe(bookDonor),
-        new Date(),
-        bookId,
-      ]
-    );
+    // Build dynamic update query only for changed fields
+    const updateFields = [];
+    const updateValues = [];
+
+    if (finalBookTitle !== undefined && finalBookTitle !== null) {
+      updateFields.push("book_title = ?");
+      updateValues.push(finalBookTitle);
+    }
+    if (finalBookCover !== undefined && finalBookCover !== null) {
+      updateFields.push("book_cover = ?");
+      updateValues.push(finalBookCover);
+    }
+    if (finalBookQR !== undefined && finalBookQR !== null) {
+      updateFields.push("book_qr = ?");
+      updateValues.push(finalBookQR);
+    }
+    if (finalBookEdition !== undefined && finalBookEdition !== null) {
+      updateFields.push("book_edition = ?");
+      updateValues.push(finalBookEdition);
+    }
+    if (finalBookYear !== undefined && finalBookYear !== null) {
+      updateFields.push("book_year = ?");
+      updateValues.push(finalBookYear);
+    }
+    if (finalBookPrice !== undefined && finalBookPrice !== null) {
+      updateFields.push("book_price = ?");
+      updateValues.push(finalBookPrice);
+    }
+    if (finalBookDonor !== undefined && finalBookDonor !== null) {
+      updateFields.push("book_donor = ?");
+      updateValues.push(finalBookDonor);
+    }
+
+    // Only update if there are fields to update
+    if (updateFields.length > 0) {
+      updateValues.push(batchRegistrationKey);
+      const updateQuery = `UPDATE books SET ${updateFields.join(", ")} WHERE batch_registration_key = ?`;
+      
+      const [bookResult] = await pool.execute(updateQuery, updateValues);
+    }
 
     res.status(200).json({
       success: true,
-      message: "Book updated successfully",
+      message: "Books updated successfully",
       data: {
-        bookId,
+        batchRegistrationKey,
         genreId,
         publisherId,
         authorId,
@@ -370,10 +407,10 @@ router.put("/:id", async (req, res) => {
       },
     });
   } catch (error) {
-    console.error("Error updating book:", error);
+    console.error("Error updating books:", error);
     res.status(500).json({
       success: false,
-      message: "Failed to update book",
+      message: "Failed to update books",
       error: error.message,
     });
   }
