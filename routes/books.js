@@ -33,6 +33,7 @@ router.get("/", async (req, res) => {
         bs.shelf_number,
         bs.shelf_column,
         bs.shelf_row,
+        b.status,
         b.created_at
       FROM books b
       LEFT JOIN book_genre bg ON b.book_genre_id = bg.book_genre_id
@@ -82,6 +83,7 @@ router.get("/:batch_registration_key", async (req, res) => {
         bs.shelf_number,
         bs.shelf_column,
         bs.shelf_row,
+        b.status,
         b.created_at
       FROM books b
       LEFT JOIN book_genre bg ON b.book_genre_id = bg.book_genre_id
@@ -270,46 +272,51 @@ router.post("/add", (req, res) => {
 });
 
 // UPDATE BOOK ROUTE
-router.put("/:batch_registration_key", async (req, res) => {
-  try {
-    const batchRegistrationKey = req.params.batch_registration_key;
-    const {
-      book_title,
-      bookTitle,
-      book_cover,
-      bookCover,
-      book_qr,
-      bookQR,
-      book_edition,
-      bookEdition,
-      book_year,
-      bookYear,
-      book_price,
-      bookPrice,
-      book_donor,
-      bookDonor,
-      genre,
-      publisher,
-      author,
-      shelf_number,
-      shelfNumber,
-      shelf_column,
-      shelfColumn,
-      shelf_row,
-      shelfRow,
-    } = req.body;
+router.put("/:batch_registration_key", (req, res) => {
+  const upload = req.upload.single("bookCover");
+  upload(req, res, async (err) => {
+    if (err) {
+      return res.status(400).json({
+        success: false,
+        message: "File upload error",
+        error: err.message,
+      });
+    }
 
-    // Use either format (underscore or camelCase)
-    const finalBookTitle = book_title || bookTitle;
-    const finalBookCover = book_cover || bookCover;
-    const finalBookQR = book_qr || bookQR;
-    const finalBookEdition = book_edition || bookEdition;
-    const finalBookYear = book_year || bookYear;
-    const finalBookPrice = book_price || bookPrice;
-    const finalBookDonor = book_donor || bookDonor;
-    const finalShelfNumber = shelf_number || shelfNumber;
-    const finalShelfColumn = shelf_column || shelfColumn;
-    const finalShelfRow = shelf_row || shelfRow;
+    try {
+      const batchRegistrationKey = req.params.batch_registration_key;
+      let {
+        book_title,
+        author,
+        genre,
+        publisher,
+        book_edition,
+        book_year,
+        book_price,
+        book_donor,
+        book_shelf_loc_id,
+        copiesToRemove,
+        copiesToAdd,
+        book_cover,
+      } = req.body;
+
+      // If file upload is present, use buffer for book_cover
+      if (req.file && req.file.buffer) {
+        book_cover = req.file.buffer;
+      }
+
+      // Parse JSON strings from FormData if they exist
+      if (typeof copiesToRemove === 'string') {
+        try {
+          copiesToRemove = JSON.parse(copiesToRemove);
+        } catch (e) {
+          copiesToRemove = [];
+        }
+      }
+      
+      if (typeof copiesToAdd === 'string') {
+        copiesToAdd = parseInt(copiesToAdd) || 0;
+      }
 
     // Get the existing books to check if they exist
     const [booksCheck] = await pool.execute(
@@ -328,8 +335,8 @@ router.put("/:batch_registration_key", async (req, res) => {
 
     // Update genre if provided
     let genreId = existing.book_genre_id;
-    if (genre) {
-      const [genreResult] = await pool.execute(
+    if (genre !== undefined && genre !== null) {
+      await pool.execute(
         "UPDATE book_genre SET book_genre = ? WHERE book_genre_id = ?",
         [genre, genreId]
       );
@@ -337,8 +344,8 @@ router.put("/:batch_registration_key", async (req, res) => {
 
     // Update publisher if provided
     let publisherId = existing.book_publisher_id;
-    if (publisher) {
-      const [publisherResult] = await pool.execute(
+    if (publisher !== undefined && publisher !== null) {
+      await pool.execute(
         "UPDATE book_publisher SET publisher = ? WHERE book_publisher_id = ?",
         [publisher, publisherId]
       );
@@ -346,19 +353,10 @@ router.put("/:batch_registration_key", async (req, res) => {
 
     // Update author if provided
     let authorId = existing.book_author_id;
-    if (author) {
-      const [authorResult] = await pool.execute(
+    if (author !== undefined && author !== null) {
+      await pool.execute(
         "UPDATE book_author SET book_author = ? WHERE book_author_id = ?",
         [author, authorId]
-      );
-    }
-
-    // Update shelf location if provided
-    let shelfLocationId = existing.book_shelf_location_id;
-    if (finalShelfNumber && finalShelfColumn && finalShelfRow) {
-      const [shelfResult] = await pool.execute(
-        "UPDATE book_shelf_location SET shelf_number = ?, shelf_column = ?, shelf_row = ? WHERE book_shelf_loc_id = ?",
-        [finalShelfNumber, finalShelfColumn, finalShelfRow, shelfLocationId]
       );
     }
 
@@ -366,41 +364,100 @@ router.put("/:batch_registration_key", async (req, res) => {
     const updateFields = [];
     const updateValues = [];
 
-    if (finalBookTitle !== undefined && finalBookTitle !== null) {
+    if (book_title !== undefined && book_title !== null) {
       updateFields.push("book_title = ?");
-      updateValues.push(finalBookTitle);
+      updateValues.push(book_title);
     }
-    if (finalBookCover !== undefined && finalBookCover !== null) {
+    if (book_cover !== undefined && book_cover !== null) {
       updateFields.push("book_cover = ?");
-      updateValues.push(finalBookCover);
+      updateValues.push(book_cover);
     }
-    if (finalBookQR !== undefined && finalBookQR !== null) {
-      updateFields.push("book_qr = ?");
-      updateValues.push(finalBookQR);
-    }
-    if (finalBookEdition !== undefined && finalBookEdition !== null) {
+    if (book_edition !== undefined && book_edition !== null) {
       updateFields.push("book_edition = ?");
-      updateValues.push(finalBookEdition);
+      updateValues.push(book_edition);
     }
-    if (finalBookYear !== undefined && finalBookYear !== null) {
+    if (book_year !== undefined && book_year !== null) {
       updateFields.push("book_year = ?");
-      updateValues.push(finalBookYear);
+      updateValues.push(book_year);
     }
-    if (finalBookPrice !== undefined && finalBookPrice !== null) {
+    if (book_price !== undefined && book_price !== null) {
       updateFields.push("book_price = ?");
-      updateValues.push(finalBookPrice);
+      updateValues.push(book_price);
     }
-    if (finalBookDonor !== undefined && finalBookDonor !== null) {
+    if (book_donor !== undefined && book_donor !== null) {
       updateFields.push("book_donor = ?");
-      updateValues.push(finalBookDonor);
+      updateValues.push(book_donor);
+    }
+    if (book_shelf_loc_id !== undefined && book_shelf_loc_id !== null) {
+      updateFields.push("book_shelf_location_id = ?");
+      updateValues.push(book_shelf_loc_id);
     }
 
     // Only update if there are fields to update
     if (updateFields.length > 0) {
       updateValues.push(batchRegistrationKey);
       const updateQuery = `UPDATE books SET ${updateFields.join(", ")} WHERE batch_registration_key = ?`;
+      await pool.execute(updateQuery, updateValues);
+    }
+
+    // Handle removed copies - mark as "Removed"
+    if (copiesToRemove && copiesToRemove.length > 0) {
+      const placeholders = copiesToRemove.map(() => '?').join(',');
+      await pool.execute(
+        `UPDATE books SET status = 'Removed' WHERE book_id IN (${placeholders})`,
+        copiesToRemove
+      );
+    }
+
+    // Handle added copies
+    if (copiesToAdd && copiesToAdd > 0) {
+      // Get the highest book_number for this batch
+      const [maxNumberResult] = await pool.execute(
+        "SELECT MAX(book_number) as max_number FROM books WHERE batch_registration_key = ?",
+        [batchRegistrationKey]
+      );
       
-      const [bookResult] = await pool.execute(updateQuery, updateValues);
+      const startingNumber = (maxNumberResult[0].max_number || 0) + 1;
+      const now = new Date();
+
+      // Insert new copies
+      for (let i = 0; i < copiesToAdd; i++) {
+        const bookNumber = startingNumber + i;
+        
+        const [bookResult] = await pool.execute(
+          `INSERT INTO books (
+            book_title, book_cover, book_number, book_qr, book_edition, book_year, book_price, book_donor,
+            book_genre_id, book_publisher_id, book_shelf_location_id, book_author_id, batch_registration_key, created_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          [
+            book_title || existing.book_title,
+            book_cover || existing.book_cover,
+            bookNumber,
+            null,
+            book_edition || existing.book_edition,
+            book_year || existing.book_year,
+            book_price || existing.book_price,
+            book_donor || existing.book_donor,
+            genreId,
+            publisherId,
+            book_shelf_loc_id || existing.book_shelf_location_id,
+            authorId,
+            batchRegistrationKey,
+            now,
+          ]
+        );
+        
+        const insertedBookId = bookResult.insertId;
+
+        // Generate QR code for new copy
+        const qrData = `BookID:${insertedBookId}-No:${bookNumber}`;
+        const qrCodeBuffer = await QRCode.toBuffer(qrData);
+
+        await pool.execute("UPDATE books SET book_qr = ? WHERE book_id = ?", [
+          qrCodeBuffer,
+          insertedBookId,
+        ]);
+      }
     }
 
     res.status(200).json({
@@ -411,7 +468,9 @@ router.put("/:batch_registration_key", async (req, res) => {
         genreId,
         publisherId,
         authorId,
-        shelfLocationId,
+        shelfLocationId: book_shelf_loc_id || existing.book_shelf_location_id,
+        copiesToRemove: copiesToRemove ? copiesToRemove.length : 0,
+        copiesToAdd: copiesToAdd || 0,
       },
     });
   } catch (error) {
@@ -422,6 +481,7 @@ router.put("/:batch_registration_key", async (req, res) => {
       error: error.message,
     });
   }
+  });
 });
 
 // QR CODE SCAN ROUTE
