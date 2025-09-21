@@ -43,9 +43,10 @@ router.get("/", async (req, res) => {
       ORDER BY b.book_id DESC
     `);
 
+    const activeBooksCount = books.filter(b => b.status !== 'Removed').length;
     res.status(200).json({
       success: true,
-      count: books.length,
+      count: activeBooksCount,
       data: books,
     });
   } catch (error) {
@@ -103,10 +104,26 @@ router.get("/:batch_registration_key", async (req, res) => {
       });
     }
 
-    res.status(200).json({
-      success: true,
-      data: books[0],
-    });
+    if (books.length > 0) {
+      const [allBooks] = await pool.execute(
+        `SELECT * FROM books WHERE batch_registration_key = ?`,
+        [req.params.batch_registration_key]
+      );
+      const activeBooks = allBooks.filter(b => b.status !== 'Removed');
+      const bookData = {
+        ...books[0],
+        quantity: activeBooks.length,
+      };
+      res.status(200).json({
+        success: true,
+        data: bookData,
+      });
+    } else {
+      res.status(200).json({
+        success: true,
+        data: books[0],
+      });
+    }
   } catch (error) {
     console.error("Error fetching book:", error);
     res.status(500).json({
