@@ -371,12 +371,11 @@ router.delete('/:id', async (req, res) => {
   try {
     const researchPaperId = req.params.id;
 
-    // Get research paper details to find related records
+    // Check if research paper exists
     const [papers] = await pool.execute(
-      'SELECT department_id, research_author_id FROM research_papers WHERE research_paper_id = ?',
+      'SELECT research_paper_id FROM research_papers WHERE research_paper_id = ?',
       [researchPaperId]
     );
-
     if (papers.length === 0) {
       return res.status(404).json({
         success: false,
@@ -384,17 +383,21 @@ router.delete('/:id', async (req, res) => {
       });
     }
 
-    const paper = papers[0];
+    // Delete authors for this research paper
+    await pool.execute(
+      'DELETE FROM research_author WHERE research_paper_id = ?',
+      [researchPaperId]
+    );
 
     // Delete the research paper record
-    const [result] = await pool.execute(
+    await pool.execute(
       'DELETE FROM research_papers WHERE research_paper_id = ?',
       [researchPaperId]
     );
 
     res.status(200).json({
       success: true,
-      message: 'Research paper deleted successfully',
+      message: 'Research paper and its authors deleted successfully',
       data: { id: researchPaperId }
     });
   } catch (error) {

@@ -317,12 +317,10 @@ router.put("/:batch_registration_key", (req, res) => {
         book_cover,
       } = req.body;
 
-      // If file upload is present, use buffer for book_cover
       if (req.file && req.file.buffer) {
         book_cover = req.file.buffer;
       }
 
-      // Parse JSON strings from FormData if they exist
       if (typeof copiesToRemove === 'string') {
         try {
           copiesToRemove = JSON.parse(copiesToRemove);
@@ -335,7 +333,6 @@ router.put("/:batch_registration_key", (req, res) => {
         copiesToAdd = parseInt(copiesToAdd) || 0;
       }
 
-    // Get the existing books to check if they exist
     const [booksCheck] = await pool.execute(
       "SELECT * FROM books WHERE batch_registration_key = ?",
       [batchRegistrationKey]
@@ -350,7 +347,6 @@ router.put("/:batch_registration_key", (req, res) => {
 
     const existing = booksCheck[0];
 
-    // Update genre if provided
     let genreId = existing.book_genre_id;
     if (genre !== undefined && genre !== null) {
       await pool.execute(
@@ -359,7 +355,6 @@ router.put("/:batch_registration_key", (req, res) => {
       );
     }
 
-    // Update publisher if provided
     let publisherId = existing.book_publisher_id;
     if (publisher !== undefined && publisher !== null) {
       await pool.execute(
@@ -368,7 +363,6 @@ router.put("/:batch_registration_key", (req, res) => {
       );
     }
 
-    // Update author if provided
     let authorId = existing.book_author_id;
     if (author !== undefined && author !== null) {
       await pool.execute(
@@ -377,7 +371,6 @@ router.put("/:batch_registration_key", (req, res) => {
       );
     }
 
-    // Build dynamic update query only for changed fields
     const updateFields = [];
     const updateValues = [];
 
@@ -410,14 +403,12 @@ router.put("/:batch_registration_key", (req, res) => {
       updateValues.push(book_shelf_loc_id);
     }
 
-    // Only update if there are fields to update
     if (updateFields.length > 0) {
       updateValues.push(batchRegistrationKey);
       const updateQuery = `UPDATE books SET ${updateFields.join(", ")} WHERE batch_registration_key = ?`;
       await pool.execute(updateQuery, updateValues);
     }
 
-    // Handle removed copies - mark as "Removed"
     if (copiesToRemove && copiesToRemove.length > 0) {
       const placeholders = copiesToRemove.map(() => '?').join(',');
       await pool.execute(
@@ -426,9 +417,7 @@ router.put("/:batch_registration_key", (req, res) => {
       );
     }
 
-    // Handle added copies
     if (copiesToAdd && copiesToAdd > 0) {
-      // Get the highest book_number for this batch
       const [maxNumberResult] = await pool.execute(
         "SELECT MAX(book_number) as max_number FROM books WHERE batch_registration_key = ?",
         [batchRegistrationKey]
@@ -437,7 +426,6 @@ router.put("/:batch_registration_key", (req, res) => {
       const startingNumber = (maxNumberResult[0].max_number || 0) + 1;
       const now = new Date();
 
-      // Insert new copies
       for (let i = 0; i < copiesToAdd; i++) {
         const bookNumber = startingNumber + i;
         
@@ -466,7 +454,6 @@ router.put("/:batch_registration_key", (req, res) => {
         
         const insertedBookId = bookResult.insertId;
 
-        // Generate QR code for new copy
         const qrData = `BookID:${insertedBookId}-No:${bookNumber}`;
         const qrCodeBuffer = await QRCode.toBuffer(qrData);
 
@@ -499,6 +486,46 @@ router.put("/:batch_registration_key", (req, res) => {
     });
   }
   });
+});
+
+// DELETE BOOKS BY BATCH REGISTRATION KEY ROUTE
+router.delete('/:batch_registration_key', async (req, res) => {
+  try {
+    const batchRegistrationKey = req.params.batch_registration_key;
+
+    const [books] = await pool.execute(
+      'SELECT * FROM books WHERE batch_registration_key = ?',
+      [batchRegistrationKey]
+    );
+
+    if (books.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: 'No books found for the given batch registration key',
+      });
+    }
+
+    await pool.execute(
+      'DELETE FROM books WHERE batch_registration_key = ?',
+      [batchRegistrationKey]
+    );
+
+    res.status(200).json({
+      success: true,
+      message: 'Books deleted successfully',
+      data: {
+        batchRegistrationKey,
+        deletedCount: books.length,
+      },
+    });
+  } catch (error) {
+    console.error('Error deleting books:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to delete books',
+      error: error.message,
+    });
+  }
 });
 
 // QR CODE SCAN ROUTE
