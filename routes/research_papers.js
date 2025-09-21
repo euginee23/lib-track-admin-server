@@ -260,16 +260,23 @@ router.post('/add', async (req, res) => {
 router.put('/:id', async (req, res) => {
   try {
     const researchPaperId = req.params.id;
-    const {
-      researchTitle,
-      yearPublication,
-      researchAbstract,
+    let {
+      research_title,
+      year_publication,
+      research_abstract,
       department,
-      author,
-      shelfNumber,
-      shelfColumn,
-      shelfRow
+      authors,
+      book_shelf_loc_id
     } = req.body;
+
+    // Parse JSON strings from FormData if they exist
+    if (typeof authors === 'string') {
+      try {
+        authors = JSON.parse(authors);
+      } catch (e) {
+        authors = [];
+      }
+    }
 
     // Get the existing research paper to check if it exists
     const [paperCheck] = await pool.execute(
@@ -288,47 +295,57 @@ router.put('/:id', async (req, res) => {
 
     // Update department if provided
     let departmentId = existing.department_id;
-    if (department) {
-      const [departmentResult] = await pool.execute(
-        'UPDATE departments SET department_name = ?, updated_at = ? WHERE department_id = ?',
-        [department, new Date(), departmentId]
+    if (department !== undefined && department !== null) {
+      await pool.execute(
+        'UPDATE departments SET department_name = ? WHERE department_id = ?',
+        [department, departmentId]
       );
     }
 
-    // Update author if provided
-    let authorId = existing.research_author_id;
-    if (author) {
-      const [authorResult] = await pool.execute(
-        'UPDATE research_author SET author_name = ?, updated_at = ? WHERE research_author_id = ?',
-        [author, new Date(), authorId]
+    // Update authors if provided
+    if (authors !== undefined && authors !== null && Array.isArray(authors) && authors.length > 0) {
+      // Delete existing authors for this research paper
+      await pool.execute(
+        'DELETE FROM research_author WHERE research_paper_id = ?',
+        [researchPaperId]
       );
+      
+      // Insert new authors
+      for (const author of authors) {
+        await pool.execute(
+          'INSERT INTO research_author (research_paper_id, author_name, created_at) VALUES (?, ?, ?)',
+          [researchPaperId, safe(author), new Date()]
+        );
+      }
     }
 
-    // Update shelf location if provided
-    let shelfLocationId = existing.book_shelf_loc_id;
-    if (shelfNumber && shelfColumn && shelfRow) {
-      const [shelfResult] = await pool.execute(
-        'UPDATE book_shelf_location SET shelf_number = ?, shelf_column = ?, shelf_row = ?, updated_at = ? WHERE book_shelf_loc_id = ?',
-        [shelfNumber, shelfColumn, shelfRow, new Date(), shelfLocationId]
-      );
+    // Build dynamic update query only for changed fields
+    const updateFields = [];
+    const updateValues = [];
+
+    if (research_title !== undefined && research_title !== null) {
+      updateFields.push("research_title = ?");
+      updateValues.push(research_title);
+    }
+    if (year_publication !== undefined && year_publication !== null) {
+      updateFields.push("year_publication = ?");
+      updateValues.push(year_publication);
+    }
+    if (research_abstract !== undefined && research_abstract !== null) {
+      updateFields.push("research_abstract = ?");
+      updateValues.push(research_abstract);
+    }
+    if (book_shelf_loc_id !== undefined && book_shelf_loc_id !== null) {
+      updateFields.push("book_shelf_loc_id = ?");
+      updateValues.push(book_shelf_loc_id);
     }
 
-    // Update the research paper
-    const [result] = await pool.execute(
-      `UPDATE research_papers SET 
-        research_title = COALESCE(?, research_title),
-        year_publication = COALESCE(?, year_publication),
-        research_abstract = COALESCE(?, research_abstract),
-        updated_at = ?
-      WHERE research_paper_id = ?`,
-      [
-        safe(researchTitle),
-        safe(yearPublication),
-        safe(researchAbstract),
-        new Date(),
-        researchPaperId
-      ]
-    );
+    // Only update if there are fields to update
+    if (updateFields.length > 0) {
+      updateValues.push(researchPaperId);
+      const updateQuery = `UPDATE research_papers SET ${updateFields.join(", ")} WHERE research_paper_id = ?`;
+      await pool.execute(updateQuery, updateValues);
+    }
 
     res.status(200).json({
       success: true,
@@ -336,8 +353,7 @@ router.put('/:id', async (req, res) => {
       data: { 
         researchPaperId,
         departmentId, 
-        authorId,
-        shelfLocationId
+        shelfLocationId: book_shelf_loc_id || existing.book_shelf_loc_id
       }
     });
   } catch (error) {
