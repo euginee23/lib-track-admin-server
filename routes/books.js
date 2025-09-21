@@ -30,6 +30,7 @@ router.get("/", async (req, res) => {
         ba.book_author_id AS author_id,
         ba.book_author AS author,
         bs.book_shelf_loc_id AS shelf_location_id,
+        bs.shelf_number,
         bs.shelf_column,
         bs.shelf_row,
         b.created_at
@@ -78,6 +79,7 @@ router.get("/:batch_registration_key", async (req, res) => {
         ba.book_author_id AS author_id,
         ba.book_author AS author,
         bs.book_shelf_loc_id AS shelf_location_id,
+        bs.shelf_number,
         bs.shelf_column,
         bs.shelf_row,
         b.created_at
@@ -138,18 +140,17 @@ router.post("/add", (req, res) => {
         genre,
         publisher,
         author,
-        shelfColumn,
-        shelfRow,
+        bookShelfLocId,
         quantity = 1,
       } = req.body;
 
       // VALIDATION
-      if (!genre || !publisher || !author || !shelfColumn || !shelfRow) {
+      if (!genre || !publisher || !author || !bookShelfLocId) {
         return res.status(400).json({
           success: false,
           message: "Missing required fields",
           error:
-            "genre, publisher, author, shelfColumn, and shelfRow are required and cannot be null.",
+            "genre, publisher, author, and bookShelfLocId are required and cannot be null.",
         });
       }
 
@@ -190,11 +191,15 @@ router.post("/add", (req, res) => {
       const authorId = authorResult.insertId;
 
       // SHELF LOCATION
-      const [shelfResult] = await pool.execute(
-        "INSERT INTO book_shelf_location (shelf_column, shelf_row, created_at) VALUES (?, ?, ?)",
-        [safe(shelfColumn), safe(shelfRow), new Date()]
-      );
-      const shelfLocationId = shelfResult.insertId;
+      const shelfLocationId = safe(bookShelfLocId);
+
+      if (!shelfLocationId) {
+        return res.status(400).json({
+          success: false,
+          message: "Shelf location ID is required",
+          error: "Please provide a valid shelf location ID.",
+        });
+      }
 
       // Insert multiple books based on quantity
       const bookIds = [];
@@ -286,6 +291,8 @@ router.put("/:batch_registration_key", async (req, res) => {
       genre,
       publisher,
       author,
+      shelf_number,
+      shelfNumber,
       shelf_column,
       shelfColumn,
       shelf_row,
@@ -300,6 +307,7 @@ router.put("/:batch_registration_key", async (req, res) => {
     const finalBookYear = book_year || bookYear;
     const finalBookPrice = book_price || bookPrice;
     const finalBookDonor = book_donor || bookDonor;
+    const finalShelfNumber = shelf_number || shelfNumber;
     const finalShelfColumn = shelf_column || shelfColumn;
     const finalShelfRow = shelf_row || shelfRow;
 
@@ -347,10 +355,10 @@ router.put("/:batch_registration_key", async (req, res) => {
 
     // Update shelf location if provided
     let shelfLocationId = existing.book_shelf_location_id;
-    if (finalShelfColumn && finalShelfRow) {
+    if (finalShelfNumber && finalShelfColumn && finalShelfRow) {
       const [shelfResult] = await pool.execute(
-        "UPDATE book_shelf_location SET shelf_column = ?, shelf_row = ? WHERE book_shelf_loc_id = ?",
-        [finalShelfColumn, finalShelfRow, shelfLocationId]
+        "UPDATE book_shelf_location SET shelf_number = ?, shelf_column = ?, shelf_row = ? WHERE book_shelf_loc_id = ?",
+        [finalShelfNumber, finalShelfColumn, finalShelfRow, shelfLocationId]
       );
     }
 
@@ -463,6 +471,7 @@ router.post("/scan", async (req, res) => {
         ba.book_author_id AS author_id,
         ba.book_author AS author,
         bs.book_shelf_loc_id AS shelf_location_id,
+        bs.shelf_number,
         bs.shelf_column,
         bs.shelf_row,
         b.created_at

@@ -49,7 +49,7 @@ router.get('/departments', async (req, res) => {
 // GET ALL SHELF LOCATIONS
 router.get('/shelf-locations', async (req, res) => {
   try {
-    const [locations] = await pool.execute('SELECT * FROM book_shelf_location ORDER BY shelf_column, shelf_row');
+    const [locations] = await pool.execute('SELECT * FROM book_shelf_location ORDER BY shelf_number, shelf_column, shelf_row');
     res.status(200).json({
       success: true,
       count: locations.length,
@@ -89,6 +89,7 @@ router.get('/', async (req, res) => {
         rp.created_at,
         d.department_name,
         GROUP_CONCAT(ra.author_name) AS authors,
+        bs.shelf_number,
         bs.shelf_column,
         bs.shelf_row
       FROM research_papers rp
@@ -134,6 +135,7 @@ router.get('/:id', async (req, res) => {
         rp.created_at,
         d.department_name,
         GROUP_CONCAT(ra.author_name) AS authors,
+        bs.shelf_number,
         bs.shelf_column,
         bs.shelf_row
       FROM research_papers rp
@@ -182,12 +184,13 @@ router.post('/add', async (req, res) => {
       researchAbstract,
       department,
       authors,
+      shelfNumber,
       shelfColumn,
       shelfRow
     } = req.body;
 
     // VALIDATION
-    if (!researchTitle || !yearPublication || !department || !authors || authors.length === 0 || !shelfColumn || !shelfRow) {
+    if (!researchTitle || !yearPublication || !department || !authors || authors.length === 0 || !shelfNumber || !shelfColumn || !shelfRow) {
       return res.status(400).json({
         success: false,
         message: 'Missing required fields'
@@ -203,8 +206,8 @@ router.post('/add', async (req, res) => {
 
     // SHELF LOCATION
     const [shelfResult] = await pool.execute(
-      'INSERT INTO book_shelf_location (shelf_column, shelf_row, created_at) VALUES (?, ?, ?)',
-      [safe(shelfColumn), safe(shelfRow), new Date()]
+      'INSERT INTO book_shelf_location (shelf_number, shelf_column, shelf_row, created_at) VALUES (?, ?, ?, ?)',
+      [safe(shelfNumber), safe(shelfColumn), safe(shelfRow), new Date()]
     );
     const shelfLocationId = shelfResult.insertId;
 
@@ -272,6 +275,7 @@ router.put('/:id', async (req, res) => {
       researchAbstract,
       department,
       author,
+      shelfNumber,
       shelfColumn,
       shelfRow
     } = req.body;
@@ -311,10 +315,10 @@ router.put('/:id', async (req, res) => {
 
     // Update shelf location if provided
     let shelfLocationId = existing.book_shelf_loc_id;
-    if (shelfColumn && shelfRow) {
+    if (shelfNumber && shelfColumn && shelfRow) {
       const [shelfResult] = await pool.execute(
-        'UPDATE book_shelf_location SET shelf_column = ?, shelf_row = ?, updated_at = ? WHERE book_shelf_loc_id = ?',
-        [shelfColumn, shelfRow, new Date(), shelfLocationId]
+        'UPDATE book_shelf_location SET shelf_number = ?, shelf_column = ?, shelf_row = ?, updated_at = ? WHERE book_shelf_loc_id = ?',
+        [shelfNumber, shelfColumn, shelfRow, new Date(), shelfLocationId]
       );
     }
 
