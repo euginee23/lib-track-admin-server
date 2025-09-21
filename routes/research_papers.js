@@ -184,13 +184,11 @@ router.post('/add', async (req, res) => {
       researchAbstract,
       department,
       authors,
-      shelfNumber,
-      shelfColumn,
-      shelfRow
+      shelfLocationId
     } = req.body;
 
     // VALIDATION
-    if (!researchTitle || !yearPublication || !department || !authors || authors.length === 0 || !shelfNumber || !shelfColumn || !shelfRow) {
+    if (!researchTitle || !yearPublication || !department || !authors || authors.length === 0 || !shelfLocationId) {
       return res.status(400).json({
         success: false,
         message: 'Missing required fields'
@@ -203,13 +201,6 @@ router.post('/add', async (req, res) => {
       [safe(department), new Date()]
     );
     const departmentId = departmentResult.insertId;
-
-    // SHELF LOCATION
-    const [shelfResult] = await pool.execute(
-      'INSERT INTO book_shelf_location (shelf_number, shelf_column, shelf_row, created_at) VALUES (?, ?, ?, ?)',
-      [safe(shelfNumber), safe(shelfColumn), safe(shelfRow), new Date()]
-    );
-    const shelfLocationId = shelfResult.insertId;
 
     // RESEARCH PAPER
     const [paperResult] = await pool.execute(`
