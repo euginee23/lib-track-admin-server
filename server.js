@@ -46,6 +46,9 @@ app.use('/api/users', require('./user_routes/registration'));
 // USER LOGIN ROUTE
 app.use('/api/users', require('./user_routes/login'));
 
+// USER PROFILE ROUTE
+app.use('/api/users', require('./user_routes/profile'));
+
 
 // EMAIL VERIFICATION ROUTE
 const { sendVerification } = require("./smtp/sendEmailVerification");

@@ -2,6 +2,7 @@ const express = require("express");
 const router = express.Router();
 const { pool } = require("../config/database");
 const bcrypt = require("bcryptjs");
+const jwt = require("jsonwebtoken");
 
 // USER LOGIN ROUTE
 router.post("/login", async (req, res) => {
@@ -31,51 +32,52 @@ router.post("/login", async (req, res) => {
       return res.status(401).json({ message: "Invalid credentials." });
     }
 
+    // GENERATE JWT TOKEN
+    const tokenPayload = {
+      userId: user.user_id,
+      email: user.email,
+      firstName: user.first_name,
+      lastName: user.last_name
+    };
+    
+    const token = jwt.sign(tokenPayload, process.env.JWT_SECRET || "your-secret-key", {
+      expiresIn: "7d"
+    });
+
+    // PREPARE USER DATA
+    const userData = {
+      id: user.user_id,
+      firstName: user.first_name,
+      lastName: user.last_name,
+      email: user.email,
+      studentId: user.student_id,
+      contactNumber: user.contact_number,
+      email_verification: user.email_verification,
+      librarian_approval: user.librarian_approval
+    };
+
   // CHECK IF THE USER IS APPROVED BY THE LIBRARIAN AND EMAIL IS VERIFIED
-    if (user.librarian_approval === 0 && user.email_verification === 0) {
-        return res.status(403).json({ message: "Your account is pending librarian approval and email verification.", user: {
-          id: user.id,
-          firstName: user.first_name,
-          lastName: user.last_name,
-          email: user.email,
-          studentId: user.student_id,
-          contactNumber: user.contact_number,
-        }});
+    if (user.email_verification === 0) {
+        return res.status(403).json({ 
+          message: "Please verify your email address.", 
+          user: userData,
+          token: token
+        });
     }
 
     if (user.librarian_approval === 0) {
-        return res.status(403).json({ message: "Your account is pending librarian approval.", user: {
-          id: user.id,
-          firstName: user.first_name,
-          lastName: user.last_name,
-          email: user.email,
-          studentId: user.student_id,
-          contactNumber: user.contact_number,
-        }});
+        return res.status(403).json({ 
+          message: "Your account is pending librarian approval.", 
+          user: userData,
+          token: token
+        });
     }
 
-    if (user.email_verification === 0) {
-        return res.status(403).json({ message: "Please verify your email address.", user: {
-          id: user.id,
-          firstName: user.first_name,
-          lastName: user.last_name,
-          email: user.email,
-          studentId: user.student_id,
-          contactNumber: user.contact_number,
-        }});
-    }
-
-  // SUCCESSFUL LOGIN
+  // SUCCESSFUL LOGIN - BOTH EMAIL VERIFIED AND LIBRARIAN APPROVED
     res.status(200).json({
       message: "Login successful.",
-      user: {
-        id: user.id,
-        firstName: user.first_name,
-        lastName: user.last_name,
-        email: user.email,
-        studentId: user.student_id,
-        contactNumber: user.contact_number,
-      },
+      user: userData,
+      token: token
     });
   } catch (error) {
     console.error("Error during login:", error);
