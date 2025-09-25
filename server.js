@@ -7,7 +7,7 @@ const multer = require("multer");
 require("dotenv").config();
 
 // DATABASE CONFIGURATION
-const { testConnection } = require("./config/database");
+const { testConnection, pool } = require("./config/database");
 
 const app = express();
 const PORT = process.env.PORT || 5000;
@@ -39,6 +39,76 @@ app.use('/api/research-papers', require('./routes/research_papers'));
 
 // SETTINGS ROUTE
 app.use('/api/settings', require('./routes/settings'));
+
+// USER REGISTRATION ROUTE
+app.use('/api/users', require('./user_routes/registration'));
+
+// USER LOGIN ROUTE
+app.use('/api/users', require('./user_routes/login'));
+
+
+// EMAIL VERIFICATION ROUTE
+const { sendVerification } = require("./smtp/sendEmailVerification");
+const { verifyCode } = require("./smtp/verifyEmailVerification");
+
+app.post("/api/send-verification", async (req, res) => {
+  const { email } = req.body;
+  if (!email) {
+    return res.status(400).json({ message: "Email is required." });
+  }
+  try {
+    const code = await sendVerification(email);
+    res.status(200).json({ message: "Verification code sent." });
+  } catch (error) {
+    console.error("Error sending verification:", error);
+    if (error.message === "User not found") {
+      res.status(404).json({ message: "User not found. Please register first." });
+    } else {
+      res.status(500).json({ message: "Failed to send verification code." });
+    }
+  }
+});
+
+app.post("/api/verify-code", async (req, res) => {
+  const { email, code } = req.body;
+  console.log("Verify code request:", { email, code });
+  
+  if (!email || !code) {
+    return res.status(400).json({ message: "Email and code are required." });
+  }
+
+  try {
+    // GET USER ID FROM EMAIL
+    const [rows] = await pool.query(
+      `SELECT user_id, librarian_approval FROM users WHERE email = ?`,
+      [email]
+    );
+
+    if (rows.length === 0) {
+      return res.status(404).json({ message: "User not found." });
+    }
+
+    const userId = rows[0].user_id;
+    const librarianApproval = rows[0].librarian_approval;
+    console.log("User found:", { userId, librarianApproval });
+
+    // VERIFY THE CODE
+    const isValid = await verifyCode(userId, code, "Email Verification");
+    console.log("Code verification result:", isValid);
+    
+    if (isValid) {
+      res.status(200).json({ 
+        message: "Email verified successfully.",
+        librarian_approval: librarianApproval
+      });
+    } else {
+      res.status(400).json({ message: "Invalid or expired verification code." });
+    }
+  } catch (error) {
+    console.error("Error verifying code:", error);
+    res.status(500).json({ message: "Failed to verify code." });
+  }
+});
 
 // ROOT ROUTE
 app.get("/", (req, res) => {
