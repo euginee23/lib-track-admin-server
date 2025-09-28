@@ -4,10 +4,12 @@ const helmet = require("helmet");
 const morgan = require("morgan");
 const bodyParser = require("body-parser");
 const multer = require("multer");
+const http = require("http");
 require("dotenv").config();
 
 // DATABASE CONFIGURATION
 const { testConnection, pool } = require("./config/database");
+const WebSocketServer = require("./websocket/websocket");
 
 const app = express();
 const PORT = process.env.PORT || 5000;
@@ -54,6 +56,7 @@ app.use('/api/users', require('./user_routes/profile'));
 const { sendVerification } = require("./smtp/sendEmailVerification");
 const { verifyCode } = require("./smtp/verifyEmailVerification");
 
+// SEND VERIFICATION CODE
 app.post("/api/send-verification", async (req, res) => {
   const { email } = req.body;
   if (!email) {
@@ -123,11 +126,19 @@ app.get("/", (req, res) => {
   });
 });
 
+// CREATE HTTP SERVER
+const server = http.createServer(app);
+
+// INITIALIZE WEBSOCKET SERVER
+const wsServer = new WebSocketServer(server);
+console.log("✅ WebSocket server started and ready for connections");
+wsServer.broadcast({ message: "Server started" });
+
 // SERVER
 const startServer = async () => {
   try {
     // START
-    app.listen(PORT, () => {
+    server.listen(PORT, () => {
       console.log(`🚀 Library Tracker Admin Server running on port ${PORT}`);
     });
 
