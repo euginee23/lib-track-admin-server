@@ -741,4 +741,28 @@ router.post("/shelf/:shelf_id/add-columns", async (req, res) => {
   }
 });
 
+// FETCH ALL DEPARTMENTS
+router.get("/departments", async (req, res) => {
+  try {
+    const [departments] = await pool.execute(
+      `SELECT department_id, department_name, department_acronym, created_at 
+       FROM departments 
+       ORDER BY department_name ASC`
+    );
+
+    res.status(200).json({
+      success: true,
+      count: departments.length,
+      data: departments,
+    });
+  } catch (error) {
+    console.error("Error fetching departments:", error);
+    res.status(500).json({
+      success: false,
+      message: "Failed to fetch departments",
+      error: error.message,
+    });
+  }
+});
+
 module.exports = router;

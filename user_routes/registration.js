@@ -1,39 +1,77 @@
 const express = require("express");
 const router = express.Router();
 const multer = require("multer");
-const upload = multer({ storage: multer.memoryStorage() });
+const upload = multer({ 
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 10 * 1024 * 1024 }
+});
 const { pool } = require("../config/database");
 const bcrypt = require("bcryptjs");
 
 // USER REGISTRATION ROUTE
-router.post("/register", upload.single("corImage"), async (req, res) => {
+router.post("/register", upload.fields([
+  { name: "corImage", maxCount: 1 },
+  { name: "profileImage", maxCount: 1 }
+]), async (req, res) => {
   const {
     firstName,
     middleName,
     lastName,
     email,
     studentId,
+    facultyId,
     contactNumber,
+    college,
+    position,
     password
   } = req.body;
 
   // VALIDATE REQUIRED FIELDS
-  if (!firstName || !lastName || !email || !studentId || !password) {
+  if (!firstName || !lastName || !email || !password || !college) {
     return res.status(400).json({ message: "All required fields must be filled." });
   }
 
+  // VALIDATE POSITION SPECIFIC FIELDS
+  if (position === "Student" && !studentId) {
+    return res.status(400).json({ message: "Student ID is required for student registration." });
+  }
+
+  if (position !== "Student" && !facultyId) {
+    return res.status(400).json({ message: "Faculty ID is required for faculty registration." });
+  }
+
+  if (!position) {
+    return res.status(400).json({ message: "Position is required." });
+  }
+
   try {
-  // CHECK IF USER ALREADY EXISTS
-    const [rows] = await pool.query(
-      "SELECT * FROM users WHERE email = ? OR student_id = ? OR contact_number = ?",
-      [email, studentId, contactNumber]
-    );
+    // CHECK IF USER ALREADY EXISTS
+    let checkQuery = "SELECT * FROM users WHERE email = ?";
+    let checkParams = [email];
+
+    if (position === "Student" && studentId) {
+      checkQuery += " OR student_id = ?";
+      checkParams.push(studentId);
+    }
+
+    if (position !== "Student" && facultyId) {
+      checkQuery += " OR faculty_id = ?";
+      checkParams.push(facultyId);
+    }
+
+    if (contactNumber) {
+      checkQuery += " OR contact_number = ?";
+      checkParams.push(contactNumber);
+    }
+
+    const [rows] = await pool.query(checkQuery, checkParams);
 
     if (rows.length > 0) {
       const existingUser = rows[0];
       const conflictFields = [];
       if (existingUser.email === email) conflictFields.push("email");
       if (existingUser.student_id === studentId) conflictFields.push("student_id");
+      if (existingUser.faculty_id === facultyId) conflictFields.push("faculty_id");
       if (existingUser.contact_number === contactNumber) conflictFields.push("contact_number");
 
       return res.status(409).json({
@@ -42,29 +80,36 @@ router.post("/register", upload.single("corImage"), async (req, res) => {
       });
     }
 
-  // INSERT USER DATA INTO THE DATABASE
-    const corImage = req.file ? req.file.buffer : null;
+    // STORE SELECTED DEPARTMENT ID
+    const departmentId = college;
+
+    // INSERT USER DATA INTO THE DATABASE
+    const corImage = req.files?.corImage ? req.files.corImage[0].buffer : null;
+    const profileImage = req.files?.profileImage ? req.files.profileImage[0].buffer : null;
     const createdAt = new Date();
 
-  // HASH THE PASSWORD USING BCRYPT
+    // HASH THE PASSWORD USING BCRYPT
     const saltRounds = 10;
     const hashedPassword = await bcrypt.hash(password, saltRounds);
 
     await pool.query(
-      `INSERT INTO users (first_name, middle_name, last_name, student_id, contact_number, cor, email, password, librarian_approval, email_verification, profile_photo, created_at) 
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO users (first_name, middle_name, last_name, student_id, faculty_id, department_id, position, contact_number, cor, email, password, librarian_approval, email_verification, profile_photo, created_at) 
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         firstName,
-        middleName,
+        middleName || null,
         lastName,
-        studentId,
+        position === "Student" ? studentId : null,
+        position !== "Student" ? facultyId : null,
+        departmentId,
+        position,
         contactNumber || null,
         corImage,
         email,
         hashedPassword,
         0, 
         0,
-        null,
+        profileImage,
         createdAt
       ]
     );
