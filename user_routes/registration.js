@@ -23,6 +23,7 @@ router.post("/register", upload.fields([
     contactNumber,
     college,
     position,
+    yearLevel,
     password
   } = req.body;
 
@@ -93,8 +94,8 @@ router.post("/register", upload.fields([
     const hashedPassword = await bcrypt.hash(password, saltRounds);
 
     await pool.query(
-      `INSERT INTO users (first_name, middle_name, last_name, student_id, faculty_id, department_id, position, contact_number, cor, email, password, librarian_approval, email_verification, profile_photo, created_at) 
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO users (first_name, middle_name, last_name, student_id, faculty_id, department_id, position, year_level, contact_number, cor, email, password, librarian_approval, email_verification, profile_photo, created_at) 
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         firstName,
         middleName || null,
@@ -103,6 +104,7 @@ router.post("/register", upload.fields([
         position !== "Student" ? facultyId : null,
         departmentId,
         position,
+        position === "Student" ? yearLevel : null,
         contactNumber || null,
         corImage,
         email,

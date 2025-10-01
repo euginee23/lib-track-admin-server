@@ -44,6 +44,8 @@ app.use('/api/settings', require('./routes/settings'));
 
 // USER REGISTRATION ROUTE
 app.use('/api/users', require('./user_routes/registration'));
+app.use('/api/users', require('./user_routes/getUsers'));
+app.use('/api/users', require('./user_routes/updateUsers'));
 
 // USER LOGIN ROUTE
 app.use('/api/users', require('./user_routes/login'));
