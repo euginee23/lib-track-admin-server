@@ -182,25 +182,20 @@ router.post('/add', async (req, res) => {
       researchTitle,
       yearPublication,
       researchAbstract,
-      department,
+      departmentId,
       authors,
       shelfLocationId
     } = req.body;
 
     // VALIDATION
-    if (!researchTitle || !yearPublication || !department || !authors || authors.length === 0 || !shelfLocationId) {
+    if (!researchTitle || !yearPublication || !departmentId || !authors || authors.length === 0 || !shelfLocationId) {
       return res.status(400).json({
         success: false,
         message: 'Missing required fields'
       });
     }
 
-    // DEPARTMENT
-    const [departmentResult] = await pool.execute(
-      'INSERT INTO departments (department_name, created_at) VALUES (?, ?)',
-      [safe(department), new Date()]
-    );
-    const departmentId = departmentResult.insertId;
+    // Now using the provided departmentId directly instead of creating a new department
 
     // RESEARCH PAPER
     const [paperResult] = await pool.execute(`
@@ -216,7 +211,7 @@ router.post('/add', async (req, res) => {
       researchTitle,
       yearPublication,
       researchAbstract,
-      departmentId,
+      departmentId, // Using the provided departmentId directly
       shelfLocationId,
       new Date()
     ]);
