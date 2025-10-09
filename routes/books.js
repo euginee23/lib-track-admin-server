@@ -139,16 +139,61 @@ router.post("/add", (req, res) => {
   const upload = req.upload.single("bookCover");
   upload(req, res, async (err) => {
     if (err) {
+      console.error("File upload error:", err);
+      let errorMessage = "File upload error";
+      
+      if (err.code === 'LIMIT_FILE_SIZE') {
+        errorMessage = "File size too large. Maximum file size is 30MB.";
+      } else if (err.code === 'LIMIT_UNEXPECTED_FILE') {
+        errorMessage = "Unexpected file field. Please upload only the book cover.";
+      } else if (err.code === 'LIMIT_FIELD_COUNT') {
+        errorMessage = "Too many fields in the request.";
+      } else {
+        errorMessage = err.message;
+      }
+      
       return res.status(400).json({
         success: false,
-        message: "File upload error",
-        error: err.message,
+        message: errorMessage,
+        error: err.code || err.message,
       });
     }
 
     try {
       console.log("Received book data:", req.body);
-      console.log("Received file:", req.file);
+      console.log("Received file:", req.file ? {
+        originalname: req.file.originalname,
+        mimetype: req.file.mimetype,
+        size: req.file.size
+      } : null);
+
+      // Validate file upload
+      if (!req.file) {
+        return res.status(400).json({
+          success: false,
+          message: "Book cover is required",
+          error: "Please upload a book cover image",
+        });
+      }
+
+      // Validate file type
+      const allowedMimeTypes = ['image/jpeg', 'image/jpg', 'image/png', 'image/gif', 'image/webp'];
+      if (!allowedMimeTypes.includes(req.file.mimetype)) {
+        return res.status(400).json({
+          success: false,
+          message: "Invalid file type",
+          error: "Only JPEG, PNG, GIF, and WEBP images are allowed",
+        });
+      }
+
+      // Validate file size (should be caught by multer, but double-check)
+      if (req.file.size > 30 * 1024 * 1024) {
+        return res.status(400).json({
+          success: false,
+          message: "File too large",
+          error: "Book cover must be less than 30MB",
+        });
+      }
 
       const {
         bookTitle,

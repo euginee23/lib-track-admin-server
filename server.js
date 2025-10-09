@@ -25,8 +25,8 @@ app.use(cors({
   optionsSuccessStatus: 200
 }));
 app.use(morgan("combined"));
-app.use(bodyParser.json({ limit: "10mb" }));
-app.use(bodyParser.urlencoded({ extended: true, limit: "10mb" }));
+app.use(bodyParser.json({ limit: "50mb" }));
+app.use(bodyParser.urlencoded({ extended: true, limit: "50mb" }));
 
 // HANDLE PREFLIGHT REQUESTS
 app.options('*', (req, res) => {
@@ -39,7 +39,12 @@ app.options('*', (req, res) => {
 // MULTER CONFIG FOR FILE UPLOADS
 const upload = multer({
   storage: multer.memoryStorage(),
-  limits: { fileSize: 5 * 1024 * 1024 }, // 5MB
+  limits: { 
+    fileSize: 30 * 1024 * 1024, // 30MB
+    fieldSize: 30 * 1024 * 1024, // 30MB for individual fields
+    fields: 50, // Max number of fields
+    files: 10 // Max number of files
+  },
 });
 
 // MULER INSTANCE
