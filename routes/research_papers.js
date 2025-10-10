@@ -85,8 +85,10 @@ router.get('/', async (req, res) => {
         rp.research_title,
         rp.year_publication,
         rp.research_abstract,
+        rp.research_paper_price,
         rp.research_paper_qr,
         rp.created_at,
+        rp.department_id,
         d.department_name,
         GROUP_CONCAT(ra.author_name) AS authors,
         bs.shelf_number,
@@ -131,8 +133,10 @@ router.get('/:id', async (req, res) => {
         rp.research_title,
         rp.year_publication,
         rp.research_abstract,
+        rp.research_paper_price,
         rp.research_paper_qr,
         rp.created_at,
+        rp.department_id,
         d.department_name,
         GROUP_CONCAT(ra.author_name) AS authors,
         bs.shelf_number,
@@ -184,7 +188,8 @@ router.post('/add', async (req, res) => {
       researchAbstract,
       departmentId,
       authors,
-      shelfLocationId
+      shelfLocationId,
+      price
     } = req.body;
 
     // VALIDATION
@@ -205,14 +210,16 @@ router.post('/add', async (req, res) => {
         research_abstract,
         department_id,
         book_shelf_loc_id,
+        research_paper_price,
         created_at
-      ) VALUES (?, ?, ?, ?, ?, ?)
+      ) VALUES (?, ?, ?, ?, ?, ?, ?)
     `, [
       researchTitle,
       yearPublication,
       researchAbstract,
       departmentId, // Using the provided departmentId directly
       shelfLocationId,
+      safe(price),
       new Date()
     ]);
 
@@ -259,9 +266,10 @@ router.put('/:id', async (req, res) => {
       research_title,
       year_publication,
       research_abstract,
-      department,
+      department_id,
       authors,
-      book_shelf_loc_id
+      book_shelf_loc_id,
+      research_paper_price
     } = req.body;
 
     // Parse JSON strings from FormData if they exist
@@ -287,15 +295,6 @@ router.put('/:id', async (req, res) => {
     }
 
     const existing = paperCheck[0];
-
-    // Update department if provided
-    let departmentId = existing.department_id;
-    if (department !== undefined && department !== null) {
-      await pool.execute(
-        'UPDATE departments SET department_name = ? WHERE department_id = ?',
-        [department, departmentId]
-      );
-    }
 
     // Update authors if provided
     if (authors !== undefined && authors !== null && Array.isArray(authors) && authors.length > 0) {
@@ -334,6 +333,14 @@ router.put('/:id', async (req, res) => {
       updateFields.push("book_shelf_loc_id = ?");
       updateValues.push(book_shelf_loc_id);
     }
+    if (research_paper_price !== undefined && research_paper_price !== null) {
+      updateFields.push("research_paper_price = ?");
+      updateValues.push(research_paper_price);
+    }
+    if (department_id !== undefined && department_id !== null) {
+      updateFields.push("department_id = ?");
+      updateValues.push(department_id);
+    }
 
     // Only update if there are fields to update
     if (updateFields.length > 0) {
@@ -347,7 +354,7 @@ router.put('/:id', async (req, res) => {
       message: 'Research paper updated successfully',
       data: { 
         researchPaperId,
-        departmentId, 
+        departmentId: department_id || existing.department_id, 
         shelfLocationId: book_shelf_loc_id || existing.book_shelf_loc_id
       }
     });

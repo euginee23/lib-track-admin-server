@@ -203,10 +203,25 @@ router.post("/add", (req, res) => {
         bookDonor,
         genre,
         publisher,
+        publishers,
         author,
+        authors,
         bookShelfLocId,
         quantity = 1,
       } = req.body;
+
+      console.log("Authors data:", {
+        author: author,
+        authors: authors,
+        authorsType: typeof authors,
+        authorsIsArray: Array.isArray(authors)
+      });
+      console.log("Publishers data:", {
+        publisher: publisher,
+        publishers: publishers,
+        publishersType: typeof publishers,
+        publishersIsArray: Array.isArray(publishers)
+      });
 
       // VALIDATION
       if (!genre || !publisher || !author || !bookShelfLocId) {
@@ -240,17 +255,47 @@ router.post("/add", (req, res) => {
       );
       const genreId = genreResult.insertId;
 
-      // PUBLISHER
+      // PUBLISHER - Handle multiple publishers
+      let finalPublisher = publisher;
+      if (publishers && Array.isArray(publishers) && publishers.length > 0) {
+        finalPublisher = publishers.join(", ");
+      } else if (typeof publishers === 'string') {
+        try {
+          const parsedPublishers = JSON.parse(publishers);
+          if (Array.isArray(parsedPublishers) && parsedPublishers.length > 0) {
+            finalPublisher = parsedPublishers.join(", ");
+          }
+        } catch (e) {
+          // If parsing fails, use the string as is
+          finalPublisher = publishers;
+        }
+      }
+      
       const [publisherResult] = await pool.execute(
         "INSERT INTO book_publisher (publisher, created_at) VALUES (?, ?)",
-        [safe(publisher), new Date()]
+        [safe(finalPublisher), new Date()]
       );
       const publisherId = publisherResult.insertId;
 
-      // AUTHOR
+      // AUTHOR - Handle multiple authors
+      let finalAuthor = author;
+      if (authors && Array.isArray(authors) && authors.length > 0) {
+        finalAuthor = authors.join(", ");
+      } else if (typeof authors === 'string') {
+        try {
+          const parsedAuthors = JSON.parse(authors);
+          if (Array.isArray(parsedAuthors) && parsedAuthors.length > 0) {
+            finalAuthor = parsedAuthors.join(", ");
+          }
+        } catch (e) {
+          // If parsing fails, use the string as is
+          finalAuthor = authors;
+        }
+      }
+      
       const [authorResult] = await pool.execute(
         "INSERT INTO book_author (book_author, created_at) VALUES (?, ?)",
-        [safe(author), new Date()]
+        [safe(finalAuthor), new Date()]
       );
       const authorId = authorResult.insertId;
 
