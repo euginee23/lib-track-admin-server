@@ -765,4 +765,191 @@ router.get("/departments", async (req, res) => {
   }
 });
 
+// FETCH SYSTEM SETTINGS
+router.get("/system-settings", async (req, res) => {
+  try {
+    const [settings] = await pool.execute(
+      `SELECT * FROM system_settings LIMIT 1`
+    );
+
+    // Transform the settings into a more usable format
+    const settingsRow = settings[0] || {};
+    const settingsObject = {
+      borrowingLimits: {
+        student: {
+          maxBooks: parseInt(settingsRow.student_max_book) || 3,
+          borrowPeriod: parseInt(settingsRow.student_borrow_days) || 3
+        },
+        faculty: {
+          maxBooks: parseInt(settingsRow.faculty_max_books) || 5,
+          borrowPeriod: parseInt(settingsRow.faculty_borrow_days) || 90
+        }
+      },
+      fineStructure: {
+        student: {
+          dailyFine: parseFloat(settingsRow.student_daily_fine) || 5.00
+        },
+        faculty: {
+          dailyFine: parseFloat(settingsRow.faculty_daily_fine) || 10.00
+        }
+      },
+      kioskSettings: {
+        preventLowQuantityBorrowing: settingsRow.kiosk_prevent_borrow === 1
+      }
+    };
+
+    res.status(200).json({
+      success: true,
+      data: settingsObject,
+      rawSettings: settings
+    });
+  } catch (error) {
+    console.error("Error fetching system settings:", error);
+    res.status(500).json({
+      success: false,
+      message: "Failed to fetch system settings",
+      error: error.message,
+    });
+  }
+});
+
+// UPDATE SYSTEM SETTINGS
+router.put("/system-settings", async (req, res) => {
+  const { borrowingLimits, fineStructure, kioskSettings } = req.body;
+
+  if (!borrowingLimits && !fineStructure && !kioskSettings) {
+    return res.status(400).json({
+      success: false,
+      message: "No settings provided to update",
+    });
+  }
+
+  try {
+    const updateFields = [];
+    const updateValues = [];
+
+    // Prepare borrowing limits updates
+    if (borrowingLimits) {
+      if (borrowingLimits.student) {
+        if (borrowingLimits.student.maxBooks !== undefined) {
+          updateFields.push('student_max_book = ?');
+          updateValues.push(borrowingLimits.student.maxBooks);
+        }
+        if (borrowingLimits.student.borrowPeriod !== undefined) {
+          updateFields.push('student_borrow_days = ?');
+          updateValues.push(borrowingLimits.student.borrowPeriod);
+        }
+      }
+      if (borrowingLimits.faculty) {
+        if (borrowingLimits.faculty.maxBooks !== undefined) {
+          updateFields.push('faculty_max_books = ?');
+          updateValues.push(borrowingLimits.faculty.maxBooks);
+        }
+        if (borrowingLimits.faculty.borrowPeriod !== undefined) {
+          updateFields.push('faculty_borrow_days = ?');
+          updateValues.push(borrowingLimits.faculty.borrowPeriod);
+        }
+      }
+    }
+
+    // Prepare fine structure updates
+    if (fineStructure) {
+      if (fineStructure.student && fineStructure.student.dailyFine !== undefined) {
+        updateFields.push('student_daily_fine = ?');
+        updateValues.push(fineStructure.student.dailyFine);
+      }
+      if (fineStructure.faculty && fineStructure.faculty.dailyFine !== undefined) {
+        updateFields.push('faculty_daily_fine = ?');
+        updateValues.push(fineStructure.faculty.dailyFine);
+      }
+    }
+
+    // Prepare kiosk settings updates
+    if (kioskSettings) {
+      if (kioskSettings.preventLowQuantityBorrowing !== undefined) {
+        updateFields.push('kiosk_prevent_borrow = ?');
+        updateValues.push(kioskSettings.preventLowQuantityBorrowing ? 1 : 0);
+      }
+    }
+
+    if (updateFields.length === 0) {
+      return res.status(400).json({
+        success: false,
+        message: "No valid settings provided to update",
+      });
+    }
+
+    const [result] = await pool.execute(
+      `UPDATE system_settings SET ${updateFields.join(', ')}`,
+      updateValues
+    );
+
+    res.status(200).json({
+      success: true,
+      message: `${updateFields.length} setting(s) updated successfully`,
+      affectedRows: result.affectedRows,
+    });
+  } catch (error) {
+    console.error("Error updating system settings:", error);
+    res.status(500).json({
+      success: false,
+      message: "Failed to update system settings",
+      error: error.message,
+    });
+  }
+});
+
+// UPDATE INDIVIDUAL SYSTEM SETTING
+router.put("/system-setting/:settingName", async (req, res) => {
+  const { settingName } = req.params;
+  const { settingValue } = req.body;
+
+  if (!settingName || settingValue === undefined) {
+    return res.status(400).json({
+      success: false,
+      message: "Missing required fields: settingName, settingValue",
+    });
+  }
+
+  // Define allowed setting names for security
+  const allowedSettings = [
+    'student_max_book',
+    'student_borrow_days', 
+    'faculty_max_books',
+    'faculty_borrow_days',
+    'student_daily_fine',
+    'faculty_daily_fine',
+    'kiosk_prevent_borrow'
+  ];
+
+  if (!allowedSettings.includes(settingName)) {
+    return res.status(400).json({
+      success: false,
+      message: "Invalid setting name",
+    });
+  }
+
+  try {
+    const [result] = await pool.execute(
+      `UPDATE system_settings SET ${settingName} = ?`,
+      [settingValue]
+    );
+
+    res.status(200).json({
+      success: true,
+      message: "Setting updated successfully",
+      settingName,
+      settingValue,
+      affectedRows: result.affectedRows,
+    });
+  } catch (error) {
+    console.error("Error updating system setting:", error);
+    res.status(500).json({
+      success: false,
+      message: "Failed to update system setting",
+      error: error.message,
+    });
+  }
+});
+
 module.exports = router;

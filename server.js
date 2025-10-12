@@ -59,6 +59,9 @@ app.use('/api/books', require('./routes/books'));
 // RESEARCH ROUTE
 app.use('/api/research-papers', require('./routes/research_papers'));
 
+// QR SCAN ROUTE (Unified for books and research papers)
+app.use('/api/qr', require('./routes/qrScan'));
+
 // SETTINGS ROUTE
 app.use('/api/settings', require('./routes/settings'));
 
