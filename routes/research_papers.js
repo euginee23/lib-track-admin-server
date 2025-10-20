@@ -141,7 +141,8 @@ router.get('/:id', async (req, res) => {
         GROUP_CONCAT(ra.author_name) AS authors,
         bs.shelf_number,
         bs.shelf_column,
-        bs.shelf_row
+        bs.shelf_row,
+        rp.status
       FROM research_papers rp
       LEFT JOIN departments d ON rp.department_id = d.department_id
       LEFT JOIN research_author ra ON rp.research_paper_id = ra.research_paper_id
@@ -158,7 +159,7 @@ router.get('/:id', async (req, res) => {
       });
     }
 
-    // COVERT QR CODE BUFFER TO BASE64 STRING
+    // CONVERT QR CODE BUFFER TO BASE64 STRING
     const paper = papers[0];
     const formattedPaper = {
       ...paper,

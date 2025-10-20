@@ -40,10 +40,10 @@ app.options('*', (req, res) => {
 const upload = multer({
   storage: multer.memoryStorage(),
   limits: { 
-    fileSize: 30 * 1024 * 1024, // 30MB
-    fieldSize: 30 * 1024 * 1024, // 30MB for individual fields
-    fields: 50, // Max number of fields
-    files: 10 // Max number of files
+    fileSize: 30 * 1024 * 1024, 
+    fieldSize: 30 * 1024 * 1024, 
+    fields: 50, 
+    files: 10 
   },
 });
 
@@ -64,6 +64,15 @@ app.use('/api/qr', require('./routes/qrScan'));
 
 // SETTINGS ROUTE
 app.use('/api/settings', require('./routes/settings'));
+
+// KIOSK ROUTES
+app.use('/api/kiosk', require('./kiosk_routes/borrowBook'));
+
+// TRANSACTIONS ROUTE
+app.use('/api/transactions', require('./kiosk_routes/transactions'));
+
+// FINE CALCULATION ROUTE
+app.use('/api/fines', require('./kiosk_routes/fineCalculation'));
 
 // USER REGISTRATION ROUTE
 app.use('/api/users', require('./user_routes/registration'));

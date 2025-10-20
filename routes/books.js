@@ -134,6 +134,68 @@ router.get("/:batch_registration_key", async (req, res) => {
   }
 });
 
+// GET BOOK BY BOOK ID ROUTE
+router.get("/book/:book_id", async (req, res) => {
+  try {
+    const { book_id } = req.params;
+
+    const [books] = await pool.execute(
+      `
+      SELECT 
+        b.book_id,
+        b.book_title,
+        b.book_cover,
+        b.book_number,
+        b.book_qr,
+        b.book_edition,
+        b.book_year,
+        b.book_price,
+        b.book_donor,
+        b.batch_registration_key,
+        bg.book_genre_id AS genre_id,
+        bg.book_genre AS genre,
+        bp.book_publisher_id AS publisher_id,
+        bp.publisher,
+        ba.book_author_id AS author_id,
+        ba.book_author AS author,
+        bs.book_shelf_loc_id AS shelf_location_id,
+        bs.shelf_number,
+        bs.shelf_column,
+        bs.shelf_row,
+        b.status,
+        b.created_at
+      FROM books b
+      LEFT JOIN book_genre bg ON b.book_genre_id = bg.book_genre_id
+      LEFT JOIN book_publisher bp ON b.book_publisher_id = bp.book_publisher_id
+      LEFT JOIN book_author ba ON b.book_author_id = ba.book_author_id
+      LEFT JOIN book_shelf_location bs ON b.book_shelf_location_id = bs.book_shelf_loc_id
+      WHERE b.book_id = ?
+      LIMIT 1
+    `,
+      [book_id]
+    );
+
+    if (books.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: "Book not found",
+      });
+    }
+
+    res.status(200).json({
+      success: true,
+      data: books[0],
+    });
+  } catch (error) {
+    console.error("Error fetching book by ID:", error);
+    res.status(500).json({
+      success: false,
+      message: "Failed to fetch book",
+      error: error.message,
+    });
+  }
+});
+
 // INSERT BOOKS ROUTE
 router.post("/add", (req, res) => {
   const upload = req.upload.single("bookCover");
