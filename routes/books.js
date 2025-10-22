@@ -23,8 +23,15 @@ router.get("/", async (req, res) => {
         b.book_price,
         b.book_donor,
         b.batch_registration_key,
-        bg.book_genre_id AS genre_id,
-        bg.book_genre AS genre,
+        b.isUsingDepartment,
+        CASE 
+          WHEN b.isUsingDepartment = 1 THEN d.department_id 
+          ELSE bg.book_genre_id 
+        END AS genre_id,
+        CASE 
+          WHEN b.isUsingDepartment = 1 THEN d.department_name 
+          ELSE bg.book_genre 
+        END AS genre,
         bp.book_publisher_id AS publisher_id,
         bp.publisher,
         ba.book_author_id AS author_id,
@@ -36,7 +43,8 @@ router.get("/", async (req, res) => {
         b.status,
         b.created_at
       FROM books b
-      LEFT JOIN book_genre bg ON b.book_genre_id = bg.book_genre_id
+      LEFT JOIN book_genre bg ON b.book_genre_id = bg.book_genre_id AND b.isUsingDepartment = 0
+      LEFT JOIN departments d ON b.book_genre_id = d.department_id AND b.isUsingDepartment = 1
       LEFT JOIN book_publisher bp ON b.book_publisher_id = bp.book_publisher_id
       LEFT JOIN book_author ba ON b.book_author_id = ba.book_author_id
       LEFT JOIN book_shelf_location bs ON b.book_shelf_location_id = bs.book_shelf_loc_id
@@ -74,8 +82,16 @@ router.get("/:batch_registration_key", async (req, res) => {
         b.book_year,
         b.book_price,
         b.book_donor,
-        bg.book_genre_id AS genre_id,
-        bg.book_genre AS genre,
+        b.batch_registration_key,
+        b.isUsingDepartment,
+        CASE 
+          WHEN b.isUsingDepartment = 1 THEN d.department_id 
+          ELSE bg.book_genre_id 
+        END AS genre_id,
+        CASE 
+          WHEN b.isUsingDepartment = 1 THEN d.department_name 
+          ELSE bg.book_genre 
+        END AS genre,
         bp.book_publisher_id AS publisher_id,
         bp.publisher,
         ba.book_author_id AS author_id,
@@ -87,7 +103,8 @@ router.get("/:batch_registration_key", async (req, res) => {
         b.status,
         b.created_at
       FROM books b
-      LEFT JOIN book_genre bg ON b.book_genre_id = bg.book_genre_id
+      LEFT JOIN book_genre bg ON b.book_genre_id = bg.book_genre_id AND b.isUsingDepartment = 0
+      LEFT JOIN departments d ON b.book_genre_id = d.department_id AND b.isUsingDepartment = 1
       LEFT JOIN book_publisher bp ON b.book_publisher_id = bp.book_publisher_id
       LEFT JOIN book_author ba ON b.book_author_id = ba.book_author_id
       LEFT JOIN book_shelf_location bs ON b.book_shelf_location_id = bs.book_shelf_loc_id
@@ -152,8 +169,15 @@ router.get("/book/:book_id", async (req, res) => {
         b.book_price,
         b.book_donor,
         b.batch_registration_key,
-        bg.book_genre_id AS genre_id,
-        bg.book_genre AS genre,
+        b.isUsingDepartment,
+        CASE 
+          WHEN b.isUsingDepartment = 1 THEN d.department_id 
+          ELSE bg.book_genre_id 
+        END AS genre_id,
+        CASE 
+          WHEN b.isUsingDepartment = 1 THEN d.department_name 
+          ELSE bg.book_genre 
+        END AS genre,
         bp.book_publisher_id AS publisher_id,
         bp.publisher,
         ba.book_author_id AS author_id,
@@ -165,7 +189,8 @@ router.get("/book/:book_id", async (req, res) => {
         b.status,
         b.created_at
       FROM books b
-      LEFT JOIN book_genre bg ON b.book_genre_id = bg.book_genre_id
+      LEFT JOIN book_genre bg ON b.book_genre_id = bg.book_genre_id AND b.isUsingDepartment = 0
+      LEFT JOIN departments d ON b.book_genre_id = d.department_id AND b.isUsingDepartment = 1
       LEFT JOIN book_publisher bp ON b.book_publisher_id = bp.book_publisher_id
       LEFT JOIN book_author ba ON b.book_author_id = ba.book_author_id
       LEFT JOIN book_shelf_location bs ON b.book_shelf_location_id = bs.book_shelf_loc_id
@@ -264,6 +289,8 @@ router.post("/add", (req, res) => {
         bookPrice,
         bookDonor,
         genre,
+        department,
+        useDepartmentInstead,
         publisher,
         publishers,
         author,
@@ -286,12 +313,15 @@ router.post("/add", (req, res) => {
       });
 
       // VALIDATION
-      if (!genre || !publisher || !author || !bookShelfLocId) {
+      const isUsingDepartment = useDepartmentInstead === 'true' || useDepartmentInstead === true;
+      const categoryValue = isUsingDepartment ? department : genre;
+      
+      if (!categoryValue || !publisher || !author || !bookShelfLocId) {
         return res.status(400).json({
           success: false,
           message: "Missing required fields",
           error:
-            "genre, publisher, author, and bookShelfLocId are required and cannot be null.",
+            `${isUsingDepartment ? 'department' : 'genre'}, publisher, author, and bookShelfLocId are required and cannot be null.`,
         });
       }
 
@@ -310,12 +340,19 @@ router.post("/add", (req, res) => {
         .toString(36)
         .substring(2, 10)}`;
 
-      // GENRE
-      const [genreResult] = await pool.execute(
-        "INSERT INTO book_genre (book_genre, created_at) VALUES (?, ?)",
-        [safe(genre), new Date()]
-      );
-      const genreId = genreResult.insertId;
+      // GENRE OR DEPARTMENT
+      let categoryId;
+      if (isUsingDepartment) {
+        // Use the department ID directly (it should already exist)
+        categoryId = safe(department);
+      } else {
+        // Create new genre entry
+        const [genreResult] = await pool.execute(
+          "INSERT INTO book_genre (book_genre, created_at) VALUES (?, ?)",
+          [safe(genre), new Date()]
+        );
+        categoryId = genreResult.insertId;
+      }
 
       // PUBLISHER - Handle multiple publishers
       let finalPublisher = publisher;
@@ -380,8 +417,8 @@ router.post("/add", (req, res) => {
         const [bookResult] = await pool.execute(
           `INSERT INTO books (
             book_title, book_cover, book_number, book_qr, book_edition, book_year, book_price, book_donor,
-            book_genre_id, book_publisher_id, book_shelf_location_id, book_author_id, batch_registration_key, created_at
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            book_genre_id, book_publisher_id, book_shelf_location_id, book_author_id, batch_registration_key, isUsingDepartment, created_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
           [
             safe(bookTitle),
             safe(req.file.buffer),
@@ -391,11 +428,12 @@ router.post("/add", (req, res) => {
             safe(bookYear),
             safe(bookPrice),
             safe(bookDonor),
-            genreId,
+            categoryId,
             publisherId,
             shelfLocationId,
             authorId,
             batchRegistrationKey,
+            isUsingDepartment ? 1 : 0,
             now,
           ]
         );
@@ -421,12 +459,13 @@ router.post("/add", (req, res) => {
         })`,
         data: {
           bookIds,
-          genreId,
+          categoryId,
           publisherId,
           authorId,
           shelfLocationId,
           batchRegistrationKey,
           quantity: qtyNumber,
+          isUsingDepartment,
         },
       });
     } catch (error) {
@@ -458,6 +497,8 @@ router.put("/:batch_registration_key", (req, res) => {
         book_title,
         author,
         genre,
+        department,
+        useDepartmentInstead,
         publisher,
         book_edition,
         book_year,
@@ -468,6 +509,14 @@ router.put("/:batch_registration_key", (req, res) => {
         copiesToAdd,
         book_cover,
       } = req.body;
+
+      console.log('Received update data:', {
+        department,
+        useDepartmentInstead,
+        genre,
+        departmentType: typeof department,
+        useDepartmentInsteadType: typeof useDepartmentInstead
+      });
 
       if (req.file && req.file.buffer) {
         book_cover = req.file.buffer;
@@ -498,13 +547,58 @@ router.put("/:batch_registration_key", (req, res) => {
     }
 
     const existing = booksCheck[0];
-
-    let genreId = existing.book_genre_id;
-    if (genre !== undefined && genre !== null) {
-      await pool.execute(
-        "UPDATE book_genre SET book_genre = ? WHERE book_genre_id = ?",
-        [genre, genreId]
-      );
+    const isUsingDepartment = useDepartmentInstead === 'true' || useDepartmentInstead === true;
+    
+    let categoryId = existing.book_genre_id;
+    let shouldUpdateCategory = false;
+    let shouldUpdateIsUsingDepartment = false;
+    
+    // Handle genre/department changes
+    if (isUsingDepartment) {
+      if (department !== undefined && department !== null) {
+        const newDepartmentId = parseInt(department);
+        const existingDepartmentId = parseInt(existing.book_genre_id);
+        console.log(`Department update: existing=${existingDepartmentId}, new=${newDepartmentId}, isUsingDept=${existing.isUsingDepartment}, types: existing=${typeof existingDepartmentId}, new=${typeof newDepartmentId}`);
+        // Check if we're switching from genre to department OR changing to a different department
+        if (existing.isUsingDepartment === 0 || existingDepartmentId !== newDepartmentId) {
+          categoryId = newDepartmentId; // Use department ID directly
+          shouldUpdateCategory = true;
+          console.log(`Will update category to department ID: ${newDepartmentId}`);
+          // Only update the isUsingDepartment flag if we're switching from genre to department
+          if (existing.isUsingDepartment === 0) {
+            shouldUpdateIsUsingDepartment = true;
+            console.log('Switching from genre to department');
+          } else {
+            console.log('Changing from one department to another');
+          }
+        } else {
+          console.log('No department change needed - same department ID');
+        }
+      }
+    } else {
+      if (genre !== undefined && genre !== null) {
+        console.log(`Genre update: existing=${existing.book_genre_id}, new=${genre}, isUsingDept=${existing.isUsingDepartment}`);
+        // Update existing genre or create new one based on current state
+        if (existing.isUsingDepartment === 1) {
+          // Was using department, now switching to genre - create new genre
+          const [genreResult] = await pool.execute(
+            "INSERT INTO book_genre (book_genre, created_at) VALUES (?, ?)",
+            [genre, new Date()]
+          );
+          categoryId = genreResult.insertId;
+          shouldUpdateCategory = true;
+          shouldUpdateIsUsingDepartment = true;
+          console.log(`Switching from department to genre, created new genre ID: ${categoryId}`);
+        } else {
+          // Was using genre, update existing genre
+          await pool.execute(
+            "UPDATE book_genre SET book_genre = ? WHERE book_genre_id = ?",
+            [genre, categoryId]
+          );
+          shouldUpdateCategory = true;
+          console.log(`Updated existing genre ID ${categoryId} with new name: ${genre}`);
+        }
+      }
     }
 
     let publisherId = existing.book_publisher_id;
@@ -554,11 +648,23 @@ router.put("/:batch_registration_key", (req, res) => {
       updateFields.push("book_shelf_location_id = ?");
       updateValues.push(book_shelf_loc_id);
     }
+    if (shouldUpdateCategory) {
+      updateFields.push("book_genre_id = ?");
+      updateValues.push(categoryId);
+    }
+    if (shouldUpdateIsUsingDepartment) {
+      updateFields.push("isUsingDepartment = ?");
+      updateValues.push(isUsingDepartment ? 1 : 0);
+    }
 
     if (updateFields.length > 0) {
       updateValues.push(batchRegistrationKey);
       const updateQuery = `UPDATE books SET ${updateFields.join(", ")} WHERE batch_registration_key = ?`;
+      console.log('Update query:', updateQuery);
+      console.log('Update values:', updateValues);
       await pool.execute(updateQuery, updateValues);
+    } else {
+      console.log('No fields to update');
     }
 
     if (copiesToRemove && copiesToRemove.length > 0) {
@@ -584,8 +690,8 @@ router.put("/:batch_registration_key", (req, res) => {
         const [bookResult] = await pool.execute(
           `INSERT INTO books (
             book_title, book_cover, book_number, book_qr, book_edition, book_year, book_price, book_donor,
-            book_genre_id, book_publisher_id, book_shelf_location_id, book_author_id, batch_registration_key, created_at
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            book_genre_id, book_publisher_id, book_shelf_location_id, book_author_id, batch_registration_key, isUsingDepartment, created_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
           [
             book_title || existing.book_title,
             book_cover || existing.book_cover,
@@ -595,11 +701,12 @@ router.put("/:batch_registration_key", (req, res) => {
             book_year || existing.book_year,
             book_price || existing.book_price,
             book_donor || existing.book_donor,
-            genreId,
+            categoryId,
             publisherId,
             book_shelf_loc_id || existing.book_shelf_location_id,
             authorId,
             batchRegistrationKey,
+            isUsingDepartment ? 1 : 0,
             now,
           ]
         );
@@ -621,12 +728,13 @@ router.put("/:batch_registration_key", (req, res) => {
       message: "Books updated successfully",
       data: {
         batchRegistrationKey,
-        genreId,
+        categoryId,
         publisherId,
         authorId,
         shelfLocationId: book_shelf_loc_id || existing.book_shelf_location_id,
         copiesToRemove: copiesToRemove ? copiesToRemove.length : 0,
         copiesToAdd: copiesToAdd || 0,
+        isUsingDepartment,
       },
     });
   } catch (error) {

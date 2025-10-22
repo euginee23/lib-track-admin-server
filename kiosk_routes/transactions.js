@@ -35,7 +35,11 @@ router.get("/", async (req, res) => {
         b.book_title,
         b.book_cover,
         b.book_number,
-        bg.book_genre,
+        b.isUsingDepartment,
+        CASE 
+          WHEN b.isUsingDepartment = 1 THEN bd.department_name 
+          ELSE bg.book_genre 
+        END as book_genre,
         rp.research_title,
         rp.research_abstract,
         rd.department_name as research_department
@@ -43,7 +47,8 @@ router.get("/", async (req, res) => {
       LEFT JOIN users u ON t.user_id = u.user_id
       LEFT JOIN departments d ON u.department_id = d.department_id
       LEFT JOIN books b ON t.book_id = b.book_id
-      LEFT JOIN book_genre bg ON b.book_genre_id = bg.book_genre_id
+      LEFT JOIN book_genre bg ON b.book_genre_id = bg.book_genre_id AND b.isUsingDepartment = 0
+      LEFT JOIN departments bd ON b.book_genre_id = bd.department_id AND b.isUsingDepartment = 1
       LEFT JOIN research_papers rp ON t.research_paper_id = rp.research_paper_id
       LEFT JOIN departments rd ON rp.department_id = rd.department_id
       ${whereClause}
@@ -100,7 +105,11 @@ router.get("/ongoing", async (req, res) => {
         b.book_title,
         b.book_cover,
         b.book_number,
-        bg.book_genre,
+        b.isUsingDepartment,
+        CASE 
+          WHEN b.isUsingDepartment = 1 THEN bd.department_name 
+          ELSE bg.book_genre 
+        END as book_genre,
         rp.research_title,
         rp.research_abstract,
         rd.department_name as research_department,
@@ -118,7 +127,8 @@ router.get("/ongoing", async (req, res) => {
       LEFT JOIN users u ON t.user_id = u.user_id
       LEFT JOIN departments d ON u.department_id = d.department_id
       LEFT JOIN books b ON t.book_id = b.book_id
-      LEFT JOIN book_genre bg ON b.book_genre_id = bg.book_genre_id
+      LEFT JOIN book_genre bg ON b.book_genre_id = bg.book_genre_id AND b.isUsingDepartment = 0
+      LEFT JOIN departments bd ON b.book_genre_id = bd.department_id AND b.isUsingDepartment = 1
       LEFT JOIN research_papers rp ON t.research_paper_id = rp.research_paper_id
       LEFT JOIN departments rd ON rp.department_id = rd.department_id
       ${whereClause}
@@ -170,7 +180,11 @@ router.get("/history", async (req, res) => {
         b.book_title,
         b.book_cover,
         b.book_number,
-        bg.book_genre,
+        b.isUsingDepartment,
+        CASE 
+          WHEN b.isUsingDepartment = 1 THEN bd.department_name 
+          ELSE bg.book_genre 
+        END as book_genre,
         rp.research_title,
         rp.research_abstract,
         rd.department_name as research_department,
@@ -189,7 +203,8 @@ router.get("/history", async (req, res) => {
       LEFT JOIN users u ON t.user_id = u.user_id
       LEFT JOIN departments d ON u.department_id = d.department_id
       LEFT JOIN books b ON t.book_id = b.book_id
-      LEFT JOIN book_genre bg ON b.book_genre_id = bg.book_genre_id
+      LEFT JOIN book_genre bg ON b.book_genre_id = bg.book_genre_id AND b.isUsingDepartment = 0
+      LEFT JOIN departments bd ON b.book_genre_id = bd.department_id AND b.isUsingDepartment = 1
       LEFT JOIN research_papers rp ON t.research_paper_id = rp.research_paper_id
       LEFT JOIN departments rd ON rp.department_id = rd.department_id
       ${whereClause}
@@ -231,7 +246,11 @@ router.get("/notifications", async (req, res) => {
         b.book_title,
         b.book_cover,
         b.book_number,
-        bg.book_genre,
+        b.isUsingDepartment,
+        CASE 
+          WHEN b.isUsingDepartment = 1 THEN bd.department_name 
+          ELSE bg.book_genre 
+        END as book_genre,
         rp.research_title,
         rd.department_name as research_department,
         DATEDIFF(STR_TO_DATE(t.due_date, '%Y-%m-%d'), CURDATE()) as days_remaining,
@@ -245,7 +264,8 @@ router.get("/notifications", async (req, res) => {
       LEFT JOIN users u ON t.user_id = u.user_id
       LEFT JOIN departments d ON u.department_id = d.department_id
       LEFT JOIN books b ON t.book_id = b.book_id
-      LEFT JOIN book_genre bg ON b.book_genre_id = bg.book_genre_id
+      LEFT JOIN book_genre bg ON b.book_genre_id = bg.book_genre_id AND b.isUsingDepartment = 0
+      LEFT JOIN departments bd ON b.book_genre_id = bd.department_id AND b.isUsingDepartment = 1
       LEFT JOIN research_papers rp ON t.research_paper_id = rp.research_paper_id
       LEFT JOIN departments rd ON rp.department_id = rd.department_id
       WHERE t.transaction_type = 'borrow' 
@@ -289,7 +309,11 @@ router.get("/:transaction_id", async (req, res) => {
         b.book_title,
         b.book_cover,
         b.book_number,
-        bg.book_genre,
+        b.isUsingDepartment,
+        CASE 
+          WHEN b.isUsingDepartment = 1 THEN bd.department_name 
+          ELSE bg.book_genre 
+        END as book_genre,
         rp.research_title,
         rp.research_abstract,
         rd.department_name as research_department
@@ -297,7 +321,8 @@ router.get("/:transaction_id", async (req, res) => {
       LEFT JOIN users u ON t.user_id = u.user_id
       LEFT JOIN departments d ON u.department_id = d.department_id
       LEFT JOIN books b ON t.book_id = b.book_id
-      LEFT JOIN book_genre bg ON b.book_genre_id = bg.book_genre_id
+      LEFT JOIN book_genre bg ON b.book_genre_id = bg.book_genre_id AND b.isUsingDepartment = 0
+      LEFT JOIN departments bd ON b.book_genre_id = bd.department_id AND b.isUsingDepartment = 1
       LEFT JOIN research_papers rp ON t.research_paper_id = rp.research_paper_id
       LEFT JOIN departments rd ON rp.department_id = rd.department_id
       WHERE t.transaction_id = ?

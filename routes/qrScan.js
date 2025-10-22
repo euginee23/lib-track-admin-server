@@ -65,8 +65,15 @@ async function scanBook(match, res) {
       b.book_donor,
       b.batch_registration_key,
       b.status,
-      bg.book_genre_id AS genre_id,
-      bg.book_genre AS genre,
+      b.isUsingDepartment,
+      CASE 
+        WHEN b.isUsingDepartment = 1 THEN d.department_id 
+        ELSE bg.book_genre_id 
+      END AS genre_id,
+      CASE 
+        WHEN b.isUsingDepartment = 1 THEN d.department_name 
+        ELSE bg.book_genre 
+      END AS genre,
       bp.book_publisher_id AS publisher_id,
       bp.publisher,
       ba.book_author_id AS author_id,
@@ -77,7 +84,8 @@ async function scanBook(match, res) {
       bs.shelf_row,
       b.created_at
     FROM books b
-    LEFT JOIN book_genre bg ON b.book_genre_id = bg.book_genre_id
+    LEFT JOIN book_genre bg ON b.book_genre_id = bg.book_genre_id AND b.isUsingDepartment = 0
+    LEFT JOIN departments d ON b.book_genre_id = d.department_id AND b.isUsingDepartment = 1
     LEFT JOIN book_publisher bp ON b.book_publisher_id = bp.book_publisher_id
     LEFT JOIN book_author ba ON b.book_author_id = ba.book_author_id
     LEFT JOIN book_shelf_location bs ON b.book_shelf_location_id = bs.book_shelf_loc_id
