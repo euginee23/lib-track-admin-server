@@ -1,6 +1,7 @@
 const express = require("express");
 const router = express.Router();
 const { pool } = require("../config/database");
+const { createOrUpdatePenalty } = require("./penalties");
 
 // UNDEFINED VALUE SQL PARAMS HELPER
 function safe(val) {
@@ -61,15 +62,15 @@ const calculateTransactionFine = async (transaction, systemSettings = null) => {
       };
     }
 
-    // Parse due date
-    const dueDate = new Date(transaction.due_date);
-    const currentDate = new Date();
-    
-    // Calculate days difference
-    const timeDifference = currentDate.getTime() - dueDate.getTime();
-    const daysDifference = Math.ceil(timeDifference / (1000 * 3600 * 24));
+  const dueDate = new Date(transaction.due_date);
+  const currentDate = new Date();
 
-    // If not overdue, no fine
+  const currentDateLocalMidnight = new Date(currentDate.getFullYear(), currentDate.getMonth(), currentDate.getDate());
+  const dueDateLocalMidnight = new Date(dueDate.getFullYear(), dueDate.getMonth(), dueDate.getDate());
+
+  const MS_PER_DAY = 1000 * 3600 * 24;
+  const daysDifference = Math.floor((currentDateLocalMidnight.getTime() - dueDateLocalMidnight.getTime()) / MS_PER_DAY);
+
     if (daysDifference <= 0) {
       return {
         fine: 0,
@@ -79,12 +80,18 @@ const calculateTransactionFine = async (transaction, systemSettings = null) => {
       };
     }
 
-    // Determine if user is student or faculty based on position
     const isStudent = !transaction.position || transaction.position === 'Student';
     const dailyFine = isStudent ? systemSettings.student_daily_fine : systemSettings.faculty_daily_fine;
     
-    // Calculate total fine
     const totalFine = daysDifference * dailyFine;
+
+    // Store penalty in database (only once per day)
+    try {
+      await createOrUpdatePenalty(transaction.transaction_id, transaction.user_id, totalFine);
+    } catch (error) {
+      console.error("Error storing penalty:", error);
+      // Continue with fine calculation even if penalty storage fails
+    }
 
     return {
       fine: totalFine,

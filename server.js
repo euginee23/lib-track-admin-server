@@ -74,6 +74,9 @@ app.use('/api/transactions', require('./kiosk_routes/transactions'));
 // FINE CALCULATION ROUTE
 app.use('/api/fines', require('./kiosk_routes/fineCalculation'));
 
+// PENALTIES ROUTE
+app.use('/api/penalties', require('./kiosk_routes/penalties'));
+
 // USER REGISTRATION ROUTE
 app.use('/api/users', require('./user_routes/registration'));
 app.use('/api/users', require('./user_routes/getUsers'));
