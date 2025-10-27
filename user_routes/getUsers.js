@@ -14,9 +14,9 @@ router.get("/registrations", async (req, res) => {
     );
     const totalCount = countResult[0].total;
     
-    // Get paginated results
+    // Get paginated results (include restriction flag)
     const [rows] = await pool.query(
-      `SELECT users.*, departments.department_name, departments.department_acronym 
+      `SELECT users.*, users.restriction, departments.department_name, departments.department_acronym 
        FROM users 
        LEFT JOIN departments ON users.department_id = departments.department_id
        ORDER BY users.created_at DESC
@@ -44,7 +44,7 @@ router.get("/registrations/:id", async (req, res) => {
   const { id } = req.params;
   try {
     const [rows] = await pool.query(
-      `SELECT users.*, departments.department_name, departments.department_acronym 
+      `SELECT users.*, users.restriction, departments.department_name, departments.department_acronym 
        FROM users 
        LEFT JOIN departments ON users.department_id = departments.department_id
        WHERE users.user_id = ?`,

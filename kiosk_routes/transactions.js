@@ -372,7 +372,6 @@ router.get("/user/:user_id", async (req, res) => {
         b.book_cover,
         b.book_number,
         b.isUsingDepartment,
-        -- computed book authors (if stored as multiple rows or as a single comma-separated value)
         (SELECT GROUP_CONCAT(ba2.book_author SEPARATOR ', ') FROM book_author ba2 WHERE ba2.book_author_id = b.book_author_id) AS book_authors,
         CASE 
           WHEN b.isUsingDepartment = 1 THEN bd.department_name 
@@ -380,14 +379,16 @@ router.get("/user/:user_id", async (req, res) => {
         END as book_genre,
         rp.research_title,
         rp.research_abstract,
-        -- computed research paper authors (concatenate multiple author rows if present)
         (SELECT GROUP_CONCAT(ra2.author_name SEPARATOR ', ') FROM research_author ra2 WHERE ra2.research_paper_id = rp.research_paper_id) AS research_authors,
         rd.department_name as research_department,
         CASE
-          WHEN t.transaction_type = 'reserve' THEN 'reserved'
-          WHEN t.transaction_type = 'borrow' THEN 'borrowed'
-          WHEN t.transaction_type = 'return' THEN 'returned'
-          ELSE t.transaction_type
+          WHEN COALESCE(NULLIF(TRIM(t.status), ''), '') <> '' THEN t.status
+          WHEN t.return_date IS NOT NULL 
+               AND TRIM(t.return_date) NOT IN ('', '0000-00-00', '0000-00-00 00:00:00') THEN 'returned'
+          WHEN LOWER(COALESCE(t.transaction_type, '')) = 'reserve' THEN 'reserved'
+          WHEN LOWER(COALESCE(t.transaction_type, '')) = 'borrow' THEN 'active'
+          WHEN LOWER(COALESCE(t.transaction_type, '')) = 'return' THEN 'returned'
+          ELSE COALESCE(t.transaction_type, '')
         END as status
       FROM transactions t
       LEFT JOIN users u ON t.user_id = u.user_id

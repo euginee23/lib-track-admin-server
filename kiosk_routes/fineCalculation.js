@@ -62,6 +62,24 @@ const calculateTransactionFine = async (transaction, systemSettings = null) => {
       };
     }
 
+    // First, check if there's already a paid penalty for this transaction
+    const [existingPenalty] = await pool.execute(
+      `SELECT * FROM penalties 
+       WHERE transaction_id = ? AND user_id = ? AND status = 'Paid'
+       ORDER BY updated_at DESC LIMIT 1`,
+      [transaction.transaction_id, transaction.user_id]
+    );
+
+    if (existingPenalty.length > 0) {
+      return {
+        fine: 0,
+        daysOverdue: 0,
+        status: 'paid',
+        message: 'Penalty already paid',
+        penalty_id: existingPenalty[0].penalty_id
+      };
+    }
+
   const dueDate = new Date(transaction.due_date);
   const currentDate = new Date();
 
@@ -85,7 +103,7 @@ const calculateTransactionFine = async (transaction, systemSettings = null) => {
     
     const totalFine = daysDifference * dailyFine;
 
-    // Store penalty in database (only once per day)
+    // Store penalty in database (only if no paid penalty exists)
     try {
       await createOrUpdatePenalty(transaction.transaction_id, transaction.user_id, totalFine);
     } catch (error) {

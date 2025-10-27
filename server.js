@@ -67,6 +67,7 @@ app.use('/api/settings', require('./routes/settings'));
 
 // KIOSK ROUTES
 app.use('/api/kiosk', require('./kiosk_routes/borrowBook'));
+app.use('/api/kiosk', require('./kiosk_routes/returnBook'));
 
 // TRANSACTIONS ROUTE
 app.use('/api/transactions', require('./kiosk_routes/transactions'));
@@ -76,6 +77,9 @@ app.use('/api/fines', require('./kiosk_routes/fineCalculation'));
 
 // PENALTIES ROUTE
 app.use('/api/penalties', require('./kiosk_routes/penalties'));
+
+// RATING ROUTE
+app.use('/api/rating', require('./kiosk_routes/rate'));
 
 // USER REGISTRATION ROUTE
 app.use('/api/users', require('./user_routes/registration'));
