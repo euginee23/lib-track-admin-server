@@ -123,4 +123,92 @@ router.post("/register", upload.fields([
   }
 });
 
+// DELETE MULTIPLE REGISTRATIONS
+router.delete("/delete", async (req, res) => {
+  const { userIds } = req.body;
+
+  // VALIDATE INPUT
+  if (!userIds || !Array.isArray(userIds) || userIds.length === 0) {
+    return res.status(400).json({ message: "User IDs are required and must be an array." });
+  }
+
+  try {
+    // CREATE PLACEHOLDERS FOR THE IN CLAUSE
+    const placeholders = userIds.map(() => '?').join(',');
+    
+    // FIRST CHECK IF ALL USERS EXIST
+    const [existingUsers] = await pool.query(
+      `SELECT user_id FROM users WHERE user_id IN (${placeholders})`,
+      userIds
+    );
+
+    if (existingUsers.length !== userIds.length) {
+      return res.status(404).json({ 
+        message: "Some users not found.",
+        found: existingUsers.map(u => u.user_id),
+        requested: userIds
+      });
+    }
+
+    // DELETE THE REGISTRATIONS
+    const [result] = await pool.query(
+      `DELETE FROM users WHERE user_id IN (${placeholders})`,
+      userIds
+    );
+
+    if (result.affectedRows > 0) {
+      res.status(200).json({ 
+        message: `${result.affectedRows} registration(s) deleted successfully.`,
+        deletedCount: result.affectedRows,
+        deletedIds: userIds
+      });
+    } else {
+      res.status(404).json({ message: "No registrations were deleted." });
+    }
+  } catch (error) {
+    console.error("Error deleting registrations:", error);
+    res.status(500).json({ message: "Internal server error while deleting registrations." });
+  }
+});
+
+// DELETE SINGLE REGISTRATION
+router.delete("/delete/:userId", async (req, res) => {
+  const { userId } = req.params;
+
+  // VALIDATE INPUT
+  if (!userId || isNaN(userId)) {
+    return res.status(400).json({ message: "Valid user ID is required." });
+  }
+
+  try {
+    // CHECK IF USER EXISTS
+    const [existingUser] = await pool.query(
+      "SELECT user_id, first_name, last_name, email FROM users WHERE user_id = ?",
+      [userId]
+    );
+
+    if (existingUser.length === 0) {
+      return res.status(404).json({ message: "User not found." });
+    }
+
+    // DELETE THE REGISTRATION
+    const [result] = await pool.query(
+      "DELETE FROM users WHERE user_id = ?",
+      [userId]
+    );
+
+    if (result.affectedRows > 0) {
+      res.status(200).json({ 
+        message: "Registration deleted successfully.",
+        deletedUser: existingUser[0]
+      });
+    } else {
+      res.status(404).json({ message: "Registration could not be deleted." });
+    }
+  } catch (error) {
+    console.error("Error deleting registration:", error);
+    res.status(500).json({ message: "Internal server error while deleting registration." });
+  }
+});
+
 module.exports = router;
