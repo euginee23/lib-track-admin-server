@@ -33,7 +33,7 @@ router.get("/", async (req, res) => {
         d.department_name,
         d.department_acronym,
         b.book_title,
-        b.book_cover,
+        bc.book_cover,
         b.book_number,
         b.isUsingDepartment,
         CASE 
@@ -47,6 +47,7 @@ router.get("/", async (req, res) => {
       LEFT JOIN users u ON t.user_id = u.user_id
       LEFT JOIN departments d ON u.department_id = d.department_id
       LEFT JOIN books b ON t.book_id = b.book_id
+      LEFT JOIN book_covers bc ON b.batch_registration_key = bc.batch_registration_key
       LEFT JOIN book_genre bg ON b.book_genre_id = bg.book_genre_id AND b.isUsingDepartment = 0
       LEFT JOIN departments bd ON b.book_genre_id = bd.department_id AND b.isUsingDepartment = 1
       LEFT JOIN research_papers rp ON t.research_paper_id = rp.research_paper_id
@@ -103,7 +104,7 @@ router.get("/ongoing", async (req, res) => {
         d.department_name,
         d.department_acronym,
         b.book_title,
-        b.book_cover,
+        bc.book_cover,
         b.book_number,
         b.isUsingDepartment,
         CASE 
@@ -127,6 +128,7 @@ router.get("/ongoing", async (req, res) => {
       LEFT JOIN users u ON t.user_id = u.user_id
       LEFT JOIN departments d ON u.department_id = d.department_id
       LEFT JOIN books b ON t.book_id = b.book_id
+      LEFT JOIN book_covers bc ON b.batch_registration_key = bc.batch_registration_key
       LEFT JOIN book_genre bg ON b.book_genre_id = bg.book_genre_id AND b.isUsingDepartment = 0
       LEFT JOIN departments bd ON b.book_genre_id = bd.department_id AND b.isUsingDepartment = 1
       LEFT JOIN research_papers rp ON t.research_paper_id = rp.research_paper_id
@@ -178,7 +180,7 @@ router.get("/history", async (req, res) => {
         d.department_name,
         d.department_acronym,
         b.book_title,
-        b.book_cover,
+        bc.book_cover,
         b.book_number,
         b.isUsingDepartment,
         CASE 
@@ -203,6 +205,7 @@ router.get("/history", async (req, res) => {
       LEFT JOIN users u ON t.user_id = u.user_id
       LEFT JOIN departments d ON u.department_id = d.department_id
       LEFT JOIN books b ON t.book_id = b.book_id
+      LEFT JOIN book_covers bc ON b.batch_registration_key = bc.batch_registration_key
       LEFT JOIN book_genre bg ON b.book_genre_id = bg.book_genre_id AND b.isUsingDepartment = 0
       LEFT JOIN departments bd ON b.book_genre_id = bd.department_id AND b.isUsingDepartment = 1
       LEFT JOIN research_papers rp ON t.research_paper_id = rp.research_paper_id
@@ -244,7 +247,7 @@ router.get("/notifications", async (req, res) => {
         d.department_name,
         d.department_acronym,
         b.book_title,
-        b.book_cover,
+        bc.book_cover,
         b.book_number,
         b.isUsingDepartment,
         CASE 
@@ -264,6 +267,7 @@ router.get("/notifications", async (req, res) => {
       LEFT JOIN users u ON t.user_id = u.user_id
       LEFT JOIN departments d ON u.department_id = d.department_id
       LEFT JOIN books b ON t.book_id = b.book_id
+      LEFT JOIN book_covers bc ON b.batch_registration_key = bc.batch_registration_key
       LEFT JOIN book_genre bg ON b.book_genre_id = bg.book_genre_id AND b.isUsingDepartment = 0
       LEFT JOIN departments bd ON b.book_genre_id = bd.department_id AND b.isUsingDepartment = 1
       LEFT JOIN research_papers rp ON t.research_paper_id = rp.research_paper_id
@@ -307,7 +311,7 @@ router.get("/:transaction_id", async (req, res) => {
         d.department_name,
         d.department_acronym,
         b.book_title,
-        b.book_cover,
+        bc.book_cover,
         b.book_number,
         b.isUsingDepartment,
         CASE 
@@ -321,6 +325,7 @@ router.get("/:transaction_id", async (req, res) => {
       LEFT JOIN users u ON t.user_id = u.user_id
       LEFT JOIN departments d ON u.department_id = d.department_id
       LEFT JOIN books b ON t.book_id = b.book_id
+      LEFT JOIN book_covers bc ON b.batch_registration_key = bc.batch_registration_key
       LEFT JOIN book_genre bg ON b.book_genre_id = bg.book_genre_id AND b.isUsingDepartment = 0
       LEFT JOIN departments bd ON b.book_genre_id = bd.department_id AND b.isUsingDepartment = 1
       LEFT JOIN research_papers rp ON t.research_paper_id = rp.research_paper_id
@@ -369,7 +374,7 @@ router.get("/user/:user_id", async (req, res) => {
         d.department_name,
         d.department_acronym,
         b.book_title,
-        b.book_cover,
+        bc.book_cover,
         b.book_number,
         b.isUsingDepartment,
         (SELECT GROUP_CONCAT(ba2.book_author SEPARATOR ', ') FROM book_author ba2 WHERE ba2.book_author_id = b.book_author_id) AS book_authors,
@@ -394,6 +399,7 @@ router.get("/user/:user_id", async (req, res) => {
       LEFT JOIN users u ON t.user_id = u.user_id
       LEFT JOIN departments d ON u.department_id = d.department_id
       LEFT JOIN books b ON t.book_id = b.book_id
+      LEFT JOIN book_covers bc ON b.batch_registration_key = bc.batch_registration_key
       LEFT JOIN book_genre bg ON b.book_genre_id = bg.book_genre_id AND b.isUsingDepartment = 0
       LEFT JOIN departments bd ON b.book_genre_id = bd.department_id AND b.isUsingDepartment = 1
       LEFT JOIN research_papers rp ON t.research_paper_id = rp.research_paper_id

@@ -56,7 +56,7 @@ async function scanBook(match, res) {
     SELECT 
       b.book_id,
       b.book_title,
-      b.book_cover,
+      bc.book_cover,
       b.book_number,
       b.book_qr,
       b.book_edition,
@@ -84,6 +84,7 @@ async function scanBook(match, res) {
       bs.shelf_row,
       b.created_at
     FROM books b
+    LEFT JOIN book_covers bc ON b.batch_registration_key = bc.batch_registration_key
     LEFT JOIN book_genre bg ON b.book_genre_id = bg.book_genre_id AND b.isUsingDepartment = 0
     LEFT JOIN departments d ON b.book_genre_id = d.department_id AND b.isUsingDepartment = 1
     LEFT JOIN book_publisher bp ON b.book_publisher_id = bp.book_publisher_id

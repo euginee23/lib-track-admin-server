@@ -15,7 +15,7 @@ router.get("/", async (req, res) => {
       SELECT 
         b.book_id,
         b.book_title,
-        b.book_cover,
+        bc.book_cover,
         b.book_number,
         b.book_qr,
         b.book_edition,
@@ -43,6 +43,7 @@ router.get("/", async (req, res) => {
         b.status,
         b.created_at
       FROM books b
+      LEFT JOIN book_covers bc ON b.batch_registration_key = bc.batch_registration_key
       LEFT JOIN book_genre bg ON b.book_genre_id = bg.book_genre_id AND b.isUsingDepartment = 0
       LEFT JOIN departments d ON b.book_genre_id = d.department_id AND b.isUsingDepartment = 1
       LEFT JOIN book_publisher bp ON b.book_publisher_id = bp.book_publisher_id
@@ -75,7 +76,7 @@ router.get("/:batch_registration_key", async (req, res) => {
       SELECT 
         b.book_id,
         b.book_title,
-        b.book_cover,
+        bc.book_cover,
         b.book_number,
         b.book_qr,
         b.book_edition,
@@ -103,6 +104,7 @@ router.get("/:batch_registration_key", async (req, res) => {
         b.status,
         b.created_at
       FROM books b
+      LEFT JOIN book_covers bc ON b.batch_registration_key = bc.batch_registration_key
       LEFT JOIN book_genre bg ON b.book_genre_id = bg.book_genre_id AND b.isUsingDepartment = 0
       LEFT JOIN departments d ON b.book_genre_id = d.department_id AND b.isUsingDepartment = 1
       LEFT JOIN book_publisher bp ON b.book_publisher_id = bp.book_publisher_id
@@ -161,7 +163,7 @@ router.get("/book/:book_id", async (req, res) => {
       SELECT 
         b.book_id,
         b.book_title,
-        b.book_cover,
+        bc.book_cover,
         b.book_number,
         b.book_qr,
         b.book_edition,
@@ -189,6 +191,7 @@ router.get("/book/:book_id", async (req, res) => {
         b.status,
         b.created_at
       FROM books b
+      LEFT JOIN book_covers bc ON b.batch_registration_key = bc.batch_registration_key
       LEFT JOIN book_genre bg ON b.book_genre_id = bg.book_genre_id AND b.isUsingDepartment = 0
       LEFT JOIN departments d ON b.book_genre_id = d.department_id AND b.isUsingDepartment = 1
       LEFT JOIN book_publisher bp ON b.book_publisher_id = bp.book_publisher_id
@@ -316,12 +319,12 @@ router.post("/add", (req, res) => {
       const isUsingDepartment = useDepartmentInstead === 'true' || useDepartmentInstead === true;
       const categoryValue = isUsingDepartment ? department : genre;
       
-      if (!categoryValue || !publisher || !author || !bookShelfLocId) {
+      if (!categoryValue || !publisher || !author || !bookShelfLocId || !req.file) {
         return res.status(400).json({
           success: false,
           message: "Missing required fields",
           error:
-            `${isUsingDepartment ? 'department' : 'genre'}, publisher, author, and bookShelfLocId are required and cannot be null.`,
+            `${isUsingDepartment ? 'department' : 'genre'}, publisher, author, bookShelfLocId, and book cover are required and cannot be null.`,
         });
       }
 
@@ -413,15 +416,20 @@ router.post("/add", (req, res) => {
       const bookIds = [];
       const now = new Date();
 
+      // Insert book cover into book_covers table (once per batch)
+      await pool.execute(
+        `INSERT INTO book_covers (batch_registration_key, book_cover, created_at) VALUES (?, ?, ?)`,
+        [batchRegistrationKey, safe(req.file.buffer), now]
+      );
+
       for (let i = 1; i <= qtyNumber; i++) {
         const [bookResult] = await pool.execute(
           `INSERT INTO books (
-            book_title, book_cover, book_number, book_qr, book_edition, book_year, book_price, book_donor,
+            book_title, book_number, book_qr, book_edition, book_year, book_price, book_donor,
             book_genre_id, book_publisher_id, book_shelf_location_id, book_author_id, batch_registration_key, isUsingDepartment, created_at
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
           [
             safe(bookTitle),
-            safe(req.file.buffer),
             i,
             null,
             safe(bookEdition),
@@ -518,8 +526,13 @@ router.put("/:batch_registration_key", (req, res) => {
         useDepartmentInsteadType: typeof useDepartmentInstead
       });
 
+      // Update book cover in book_covers table if a new file is uploaded
       if (req.file && req.file.buffer) {
         book_cover = req.file.buffer;
+        await pool.execute(
+          "UPDATE book_covers SET book_cover = ? WHERE batch_registration_key = ?",
+          [book_cover, batchRegistrationKey]
+        );
       }
 
       if (typeof copiesToRemove === 'string') {
@@ -624,10 +637,7 @@ router.put("/:batch_registration_key", (req, res) => {
       updateFields.push("book_title = ?");
       updateValues.push(book_title);
     }
-    if (book_cover !== undefined && book_cover !== null) {
-      updateFields.push("book_cover = ?");
-      updateValues.push(book_cover);
-    }
+    // book_cover is now handled separately in book_covers table
     if (book_edition !== undefined && book_edition !== null) {
       updateFields.push("book_edition = ?");
       updateValues.push(book_edition);
@@ -689,12 +699,11 @@ router.put("/:batch_registration_key", (req, res) => {
         
         const [bookResult] = await pool.execute(
           `INSERT INTO books (
-            book_title, book_cover, book_number, book_qr, book_edition, book_year, book_price, book_donor,
+            book_title, book_number, book_qr, book_edition, book_year, book_price, book_donor,
             book_genre_id, book_publisher_id, book_shelf_location_id, book_author_id, batch_registration_key, isUsingDepartment, created_at
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
           [
             book_title || existing.book_title,
-            book_cover || existing.book_cover,
             bookNumber,
             null,
             book_edition || existing.book_edition,
@@ -765,14 +774,21 @@ router.delete('/:batch_registration_key', async (req, res) => {
       });
     }
 
+    // Delete books first
     await pool.execute(
       'DELETE FROM books WHERE batch_registration_key = ?',
       [batchRegistrationKey]
     );
 
+    // Then delete the book cover
+    await pool.execute(
+      'DELETE FROM book_covers WHERE batch_registration_key = ?',
+      [batchRegistrationKey]
+    );
+
     res.status(200).json({
       success: true,
-      message: 'Books deleted successfully',
+      message: 'Books and cover deleted successfully',
       data: {
         batchRegistrationKey,
         deletedCount: books.length,
