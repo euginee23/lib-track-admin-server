@@ -1,23 +1,21 @@
-// upload_test.js
-// Simple Node script to POST a local image as multipart/form-data to the uploads endpoint.
+// qrCodeUpload_test.js
+// Simple Node script to POST a local QR image as multipart/form-data to the qr-code upload endpoint.
 // Defaults:
-//   FILE_PATH = C:\\Users\\EUGINE\\Downloads\\asdasdasdfqw.jpg
-//   TARGET_URL = https://api.libtrack.codehub.site/api/uploads/book-cover
-// You can override with environment variables:
-//   FILE_PATH, TARGET_URL
+//   FILE_PATH = C:\\Users\\EUGINE\\Downloads\\qr-image.png
+//   TARGET_URL = <UPLOAD_DOMAIN>/api/uploads/qr-code
+// You can override with environment variables: FILE_PATH, TARGET_URL
 // Usage (PowerShell):
 //   npm install axios form-data
-//   $env:FILE_PATH = 'C:\\Users\\EUGINE\\Downloads\\asdasdasdfqw.jpg'; $env:TARGET_URL = 'http://localhost:5000/api/uploads/book-cover'; node upload_test.js
+//   $env:FILE_PATH='C:\\path\\to\\qr.png'; node qrCodeUpload_test.js
 
 const fs = require('fs');
 const path = require('path');
 const axios = require('axios');
 const FormData = require('form-data');
 
-const DEFAULT_FILE = 'C:\\Users\\EUGINE\\Downloads\\asdasdasdfqw.jpg';
-// Prefer UPLOAD_DOMAIN from .env if present (keeps parity with server's UPLOAD_DOMAIN)
+const DEFAULT_FILE = 'C:\\Users\\EUGINE\\Downloads\\fawssadf.png';
 const UPLOAD_DOMAIN = process.env.UPLOAD_DOMAIN || 'https://api.libtrack.codehub.site';
-const DEFAULT_TARGET = `${UPLOAD_DOMAIN.replace(/\/+$/,'')}/api/uploads/book-cover`;
+const DEFAULT_TARGET = `${UPLOAD_DOMAIN.replace(/\/+$/,'')}/api/uploads/qr-code`;
 
 const FILE_PATH = process.env.FILE_PATH || DEFAULT_FILE;
 let TARGET_URL = process.env.TARGET_URL || DEFAULT_TARGET;
