@@ -22,8 +22,9 @@ if (!fs.existsSync(UPLOAD_DIR)) {
 const storage = multer.diskStorage({
   destination: (req, file, cb) => cb(null, UPLOAD_DIR),
   filename: (req, file, cb) => {
-    const uniqueName = Date.now() + '-' + Math.round(Math.random() * 1e9);
-    cb(null, uniqueName + path.extname(file.originalname));
+    // Use the original filename provided by the client
+    // The frontend will send files with the correct batch registration key as filename
+    cb(null, file.originalname);
   },
 });
 

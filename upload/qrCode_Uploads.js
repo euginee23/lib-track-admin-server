@@ -22,8 +22,9 @@ if (!fs.existsSync(QR_UPLOAD_DIR)) {
 const qrStorage = multer.diskStorage({
   destination: (req, file, cb) => cb(null, QR_UPLOAD_DIR),
   filename: (req, file, cb) => {
-    const uniqueName = Date.now() + '-' + Math.round(Math.random() * 1e9);
-    cb(null, uniqueName + path.extname(file.originalname));
+    // Use the original filename provided by the client
+    // The server will send files with the correct book_id_XXX_QrCode.png as filename
+    cb(null, file.originalname);
   },
 });
 

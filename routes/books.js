@@ -2,14 +2,78 @@ const express = require("express");
 const router = express.Router();
 const { pool } = require("../config/database");
 const QRCode = require("qrcode");
+const fs = require("fs");
+const path = require("path");
+const axios = require("axios");
+const FormData = require("form-data");
 require('dotenv').config();
 
 // Get upload domain from environment
 const UPLOAD_DOMAIN = (process.env.UPLOAD_DOMAIN || 'https://uploads.codehub.site').replace(/\/+$/, '');
+const SERVER_BASE_URL = process.env.SERVER_BASE_URL || 'http://localhost:5000';
 
 // UNDEFINED VALUE SQL PARAMS HELPER
 function safe(val) {
   return val === undefined ? null : val;
+}
+
+// Helper function to upload book cover to file system
+async function uploadBookCover(fileBuffer, filename, mimeType) {
+  try {
+    const formData = new FormData();
+    formData.append('file', fileBuffer, { filename, contentType: mimeType });
+    
+    const response = await axios.post(`${SERVER_BASE_URL}/api/uploads/book-cover`, formData, {
+      headers: {
+        ...formData.getHeaders(),
+      },
+      timeout: 30000,
+    });
+    
+    return response.data;
+  } catch (error) {
+    console.error('Error uploading book cover:', error);
+    throw new Error('Failed to upload book cover to file system');
+  }
+}
+
+// Helper function to upload QR code to file system
+async function uploadQRCode(qrBuffer, filename) {
+  try {
+    const formData = new FormData();
+    formData.append('file', qrBuffer, { filename, contentType: 'image/png' });
+    
+    const response = await axios.post(`${SERVER_BASE_URL}/api/uploads/qr-code`, formData, {
+      headers: {
+        ...formData.getHeaders(),
+      },
+      timeout: 30000,
+    });
+    
+    return response.data;
+  } catch (error) {
+    console.error('Error uploading QR code:', error);
+    throw new Error('Failed to upload QR code to file system');
+  }
+}
+
+// Helper function to rename uploaded file
+async function renameUploadedFile(endpoint, oldFilename, newFilename) {
+  try {
+    const response = await axios.patch(`${SERVER_BASE_URL}/api/uploads/${endpoint}/${oldFilename}`, {
+      newName: newFilename
+    }, {
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      timeout: 10000,
+    });
+    
+    return response.data;
+  } catch (error) {
+    console.error(`Error renaming ${endpoint} file:`, error);
+    throw new Error(`Failed to rename ${endpoint} file`);
+  }
 }
 
 // GET ALL BOOKS ROUTE
@@ -25,7 +89,7 @@ router.get("/", async (req, res) => {
         END AS book_cover,
         b.book_number,
         CASE 
-          WHEN b.book_qr IS NOT NULL THEN CONCAT('${UPLOAD_DOMAIN}/qr_codes/book_id_', b.book_id, '_QrCode.png')
+          WHEN b.book_qr IS NOT NULL AND b.book_qr != '' THEN CONCAT('${UPLOAD_DOMAIN}', b.book_qr)
           ELSE NULL 
         END AS book_qr,
         b.book_edition,
@@ -92,7 +156,7 @@ router.get("/:batch_registration_key", async (req, res) => {
         END AS book_cover,
         b.book_number,
         CASE 
-          WHEN b.book_qr IS NOT NULL THEN CONCAT('${UPLOAD_DOMAIN}/qr_codes/book_id_', b.book_id, '_QrCode.png')
+          WHEN b.book_qr IS NOT NULL AND b.book_qr != '' THEN CONCAT('${UPLOAD_DOMAIN}', b.book_qr)
           ELSE NULL 
         END AS book_qr,
         b.book_edition,
@@ -247,266 +311,228 @@ router.get("/book/:book_id", async (req, res) => {
 });
 
 // INSERT BOOKS ROUTE
-router.post("/add", (req, res) => {
-  const upload = req.upload.single("bookCover");
-  upload(req, res, async (err) => {
-    if (err) {
-      console.error("File upload error:", err);
-      let errorMessage = "File upload error";
-      
-      if (err.code === 'LIMIT_FILE_SIZE') {
-        errorMessage = "File size too large. Maximum file size is 30MB.";
-      } else if (err.code === 'LIMIT_UNEXPECTED_FILE') {
-        errorMessage = "Unexpected file field. Please upload only the book cover.";
-      } else if (err.code === 'LIMIT_FIELD_COUNT') {
-        errorMessage = "Too many fields in the request.";
-      } else {
-        errorMessage = err.message;
-      }
-      
+router.post("/add", async (req, res) => {
+  try {
+    console.log("Received book data:", req.body);
+
+    const {
+      bookTitle,
+      bookCoverFilename, // Pre-uploaded filename instead of file
+      bookEdition,
+      bookYear,
+      bookPrice,
+      bookDonor,
+      genre,
+      department,
+      useDepartmentInstead,
+      publisher,
+      publishers,
+      author,
+      authors,
+      bookShelfLocId,
+      quantity = 1,
+      batchRegistrationKey, // Use provided batch key from frontend
+    } = req.body;
+
+    console.log("Authors data:", {
+      author: author,
+      authors: authors,
+      authorsType: typeof authors,
+      authorsIsArray: Array.isArray(authors)
+    });
+    console.log("Publishers data:", {
+      publisher: publisher,
+      publishers: publishers,
+      publishersType: typeof publishers,
+      publishersIsArray: Array.isArray(publishers)
+    });
+
+    // VALIDATION
+    const isUsingDepartment = useDepartmentInstead === 'true' || useDepartmentInstead === true;
+    const categoryValue = isUsingDepartment ? department : genre;
+    
+    if (!categoryValue || !publisher || !author || !bookShelfLocId || !bookCoverFilename || !batchRegistrationKey) {
       return res.status(400).json({
         success: false,
-        message: errorMessage,
-        error: err.code || err.message,
+        message: "Missing required fields",
+        error:
+          `${isUsingDepartment ? 'department' : 'genre'}, publisher, author, bookShelfLocId, book cover, and batch registration key are required and cannot be null.`,
       });
     }
 
-    try {
-      console.log("Received book data:", req.body);
-      console.log("Received file:", req.file ? {
-        originalname: req.file.originalname,
-        mimetype: req.file.mimetype,
-        size: req.file.size
-      } : null);
-
-      // Validate file upload
-      if (!req.file) {
-        return res.status(400).json({
-          success: false,
-          message: "Book cover is required",
-          error: "Please upload a book cover image",
-        });
-      }
-
-      // Validate file type
-      const allowedMimeTypes = ['image/jpeg', 'image/jpg', 'image/png', 'image/gif', 'image/webp'];
-      if (!allowedMimeTypes.includes(req.file.mimetype)) {
-        return res.status(400).json({
-          success: false,
-          message: "Invalid file type",
-          error: "Only JPEG, PNG, GIF, and WEBP images are allowed",
-        });
-      }
-
-      // Validate file size (should be caught by multer, but double-check)
-      if (req.file.size > 30 * 1024 * 1024) {
-        return res.status(400).json({
-          success: false,
-          message: "File too large",
-          error: "Book cover must be less than 30MB",
-        });
-      }
-
-      const {
-        bookTitle,
-        bookEdition,
-        bookYear,
-        bookPrice,
-        bookDonor,
-        genre,
-        department,
-        useDepartmentInstead,
-        publisher,
-        publishers,
-        author,
-        authors,
-        bookShelfLocId,
-        quantity = 1,
-      } = req.body;
-
-      console.log("Authors data:", {
-        author: author,
-        authors: authors,
-        authorsType: typeof authors,
-        authorsIsArray: Array.isArray(authors)
+    // MUST BE A POSITIVE NUMBER
+    const qtyNumber = parseInt(quantity);
+    if (isNaN(qtyNumber) || qtyNumber < 1) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid quantity",
+        error: "Quantity must be a positive number.",
       });
-      console.log("Publishers data:", {
-        publisher: publisher,
-        publishers: publishers,
-        publishersType: typeof publishers,
-        publishersIsArray: Array.isArray(publishers)
+    }
+
+    // GENRE OR DEPARTMENT
+    let categoryId;
+    if (isUsingDepartment) {
+      // Use the department ID directly (it should already exist)
+      categoryId = safe(department);
+    } else {
+      // Create new genre entry
+      const [genreResult] = await pool.execute(
+        "INSERT INTO book_genre (book_genre, created_at) VALUES (?, ?)",
+        [safe(genre), new Date()]
+      );
+      categoryId = genreResult.insertId;
+    }
+
+    // PUBLISHER - Handle multiple publishers
+    let finalPublisher = publisher;
+    if (publishers && Array.isArray(publishers) && publishers.length > 0) {
+      finalPublisher = publishers.join(", ");
+    } else if (typeof publishers === 'string') {
+      try {
+        const parsedPublishers = JSON.parse(publishers);
+        if (Array.isArray(parsedPublishers) && parsedPublishers.length > 0) {
+          finalPublisher = parsedPublishers.join(", ");
+        }
+      } catch (e) {
+        // If parsing fails, use the string as is
+        finalPublisher = publishers;
+      }
+    }
+    
+    const [publisherResult] = await pool.execute(
+      "INSERT INTO book_publisher (publisher, created_at) VALUES (?, ?)",
+      [safe(finalPublisher), new Date()]
+    );
+    const publisherId = publisherResult.insertId;
+
+    // AUTHOR - Handle multiple authors
+    let finalAuthor = author;
+    if (authors && Array.isArray(authors) && authors.length > 0) {
+      finalAuthor = authors.join(", ");
+    } else if (typeof authors === 'string') {
+      try {
+        const parsedAuthors = JSON.parse(authors);
+        if (Array.isArray(parsedAuthors) && parsedAuthors.length > 0) {
+          finalAuthor = parsedAuthors.join(", ");
+        }
+      } catch (e) {
+        // If parsing fails, use the string as is
+        finalAuthor = authors;
+      }
+    }
+    
+    const [authorResult] = await pool.execute(
+      "INSERT INTO book_author (book_author, created_at) VALUES (?, ?)",
+      [safe(finalAuthor), new Date()]
+    );
+    const authorId = authorResult.insertId;
+
+    // SHELF LOCATION
+    const shelfLocationId = safe(bookShelfLocId);
+
+    if (!shelfLocationId) {
+      return res.status(400).json({
+        success: false,
+        message: "Shelf location ID is required",
+        error: "Please provide a valid shelf location ID.",
       });
+    }
 
-      // VALIDATION
-      const isUsingDepartment = useDepartmentInstead === 'true' || useDepartmentInstead === true;
-      const categoryValue = isUsingDepartment ? department : genre;
-      
-      if (!categoryValue || !publisher || !author || !bookShelfLocId || !req.file) {
-        return res.status(400).json({
-          success: false,
-          message: "Missing required fields",
-          error:
-            `${isUsingDepartment ? 'department' : 'genre'}, publisher, author, bookShelfLocId, and book cover are required and cannot be null.`,
-        });
-      }
+    // Insert multiple books based on quantity
+    const bookIds = [];
+    const now = new Date();
 
-      // MUST BE A POSITIVE NUMBER
-      const qtyNumber = parseInt(quantity);
-      if (isNaN(qtyNumber) || qtyNumber < 1) {
-        return res.status(400).json({
-          success: false,
-          message: "Invalid quantity",
-          error: "Quantity must be a positive number.",
-        });
-      }
+    // Insert book cover record with file path (file already uploaded with correct name)
+    const bookCoverPath = `/book_covers/${bookCoverFilename}`;
+    await pool.execute(
+      `INSERT INTO book_covers (batch_registration_key, file_path, created_at) VALUES (?, ?, ?)`,
+      [batchRegistrationKey, bookCoverPath, now]
+    );
 
-      // GENERATE BATCH REGISTRATION KEY
-      const batchRegistrationKey = `0x${Math.random()
-        .toString(36)
-        .substring(2, 10)}`;
-
-      // GENRE OR DEPARTMENT
-      let categoryId;
-      if (isUsingDepartment) {
-        // Use the department ID directly (it should already exist)
-        categoryId = safe(department);
-      } else {
-        // Create new genre entry
-        const [genreResult] = await pool.execute(
-          "INSERT INTO book_genre (book_genre, created_at) VALUES (?, ?)",
-          [safe(genre), new Date()]
-        );
-        categoryId = genreResult.insertId;
-      }
-
-      // PUBLISHER - Handle multiple publishers
-      let finalPublisher = publisher;
-      if (publishers && Array.isArray(publishers) && publishers.length > 0) {
-        finalPublisher = publishers.join(", ");
-      } else if (typeof publishers === 'string') {
-        try {
-          const parsedPublishers = JSON.parse(publishers);
-          if (Array.isArray(parsedPublishers) && parsedPublishers.length > 0) {
-            finalPublisher = parsedPublishers.join(", ");
-          }
-        } catch (e) {
-          // If parsing fails, use the string as is
-          finalPublisher = publishers;
-        }
-      }
-      
-      const [publisherResult] = await pool.execute(
-        "INSERT INTO book_publisher (publisher, created_at) VALUES (?, ?)",
-        [safe(finalPublisher), new Date()]
-      );
-      const publisherId = publisherResult.insertId;
-
-      // AUTHOR - Handle multiple authors
-      let finalAuthor = author;
-      if (authors && Array.isArray(authors) && authors.length > 0) {
-        finalAuthor = authors.join(", ");
-      } else if (typeof authors === 'string') {
-        try {
-          const parsedAuthors = JSON.parse(authors);
-          if (Array.isArray(parsedAuthors) && parsedAuthors.length > 0) {
-            finalAuthor = parsedAuthors.join(", ");
-          }
-        } catch (e) {
-          // If parsing fails, use the string as is
-          finalAuthor = authors;
-        }
-      }
-      
-      const [authorResult] = await pool.execute(
-        "INSERT INTO book_author (book_author, created_at) VALUES (?, ?)",
-        [safe(finalAuthor), new Date()]
-      );
-      const authorId = authorResult.insertId;
-
-      // SHELF LOCATION
-      const shelfLocationId = safe(bookShelfLocId);
-
-      if (!shelfLocationId) {
-        return res.status(400).json({
-          success: false,
-          message: "Shelf location ID is required",
-          error: "Please provide a valid shelf location ID.",
-        });
-      }
-
-      // Insert multiple books based on quantity
-      const bookIds = [];
-      const now = new Date();
-
-      // Insert book cover into book_covers table (once per batch)
-      await pool.execute(
-        `INSERT INTO book_covers (batch_registration_key, book_cover, created_at) VALUES (?, ?, ?)`,
-        [batchRegistrationKey, safe(req.file.buffer), now]
-      );
-
-      for (let i = 1; i <= qtyNumber; i++) {
-        const [bookResult] = await pool.execute(
-          `INSERT INTO books (
-            book_title, book_number, book_qr, book_edition, book_year, book_price, book_donor,
-            book_genre_id, book_publisher_id, book_shelf_location_id, book_author_id, batch_registration_key, isUsingDepartment, created_at
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-          [
-            safe(bookTitle),
-            i,
-            null,
-            safe(bookEdition),
-            safe(bookYear),
-            safe(bookPrice),
-            safe(bookDonor),
-            categoryId,
-            publisherId,
-            shelfLocationId,
-            authorId,
-            batchRegistrationKey,
-            isUsingDepartment ? 1 : 0,
-            now,
-          ]
-        );
-        const insertedBookId = bookResult.insertId;
-        bookIds.push(insertedBookId);
-
-        // GENERATE QR CODE
-        const qrData = `BookID:${insertedBookId}-No:${i}`;
-        const qrCodeBuffer = await QRCode.toBuffer(qrData);
-
-        await pool.execute("UPDATE books SET book_qr = ? WHERE book_id = ?", [
-          qrCodeBuffer,
-          insertedBookId,
-        ]);
-      }
-
-      const bookId = bookIds[0];
-
-      res.status(201).json({
-        success: true,
-        message: `Book added successfully (${qtyNumber} ${
-          qtyNumber === 1 ? "copy" : "copies"
-        })`,
-        data: {
-          bookIds,
+    for (let i = 1; i <= qtyNumber; i++) {
+      const [bookResult] = await pool.execute(
+        `INSERT INTO books (
+          book_title, book_number, book_qr, book_edition, book_year, book_price, book_donor,
+          book_genre_id, book_publisher_id, book_shelf_location_id, book_author_id, batch_registration_key, isUsingDepartment, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [
+          safe(bookTitle),
+          i,
+          null, // QR will be referenced by URL, not stored as BLOB
+          safe(bookEdition),
+          safe(bookYear),
+          safe(bookPrice),
+          safe(bookDonor),
           categoryId,
           publisherId,
-          authorId,
           shelfLocationId,
+          authorId,
           batchRegistrationKey,
-          quantity: qtyNumber,
-          isUsingDepartment,
-        },
-      });
-    } catch (error) {
-      console.error("Error adding book:", error);
-      res.status(500).json({
-        success: false,
-        message: "Failed to add book",
-        error: error.message,
-      });
+          isUsingDepartment ? 1 : 0,
+          now,
+        ]
+      );
+      const insertedBookId = bookResult.insertId;
+      bookIds.push(insertedBookId);
+
+      // GENERATE AND UPLOAD QR CODE
+      const qrData = `BookID:${insertedBookId}-No:${i}`;
+      const qrCodeBuffer = await QRCode.toBuffer(qrData);
+      
+      const qrFilename = `book_id_${insertedBookId}_QrCode.png`;
+      console.log(`Uploading QR code: ${qrFilename}`);
+      
+      try {
+        const qrUpload = await uploadQRCode(qrCodeBuffer, qrFilename);
+        
+        // Rename QR file to follow our naming convention if needed
+        const finalQrFilename = qrFilename;
+        if (qrUpload.success && qrUpload.file && qrUpload.file.name !== qrFilename) {
+          try {
+            await renameUploadedFile('qr-code', qrUpload.file.name, qrFilename);
+            console.log(`QR code renamed to: ${qrFilename}`);
+          } catch (renameError) {
+            console.warn('Could not rename QR code, using generated name:', qrUpload.file.name);
+          }
+        }
+        
+        // Store QR path in database (not the full URL, just the path)
+        const qrPath = `/qr_codes/${finalQrFilename}`;
+        await pool.execute("UPDATE books SET book_qr = ? WHERE book_id = ?", [
+          qrPath, // Store path like /qr_codes/book_id_XXX_QrCode.png
+          insertedBookId,
+        ]);
+      } catch (qrError) {
+        console.error(`Failed to upload QR for book ${insertedBookId}:`, qrError);
+        // Continue without QR if upload fails
+      }
     }
-  });
+
+    res.status(201).json({
+      success: true,
+      message: `Book added successfully (${qtyNumber} ${
+        qtyNumber === 1 ? "copy" : "copies"
+      })`,
+      data: {
+        bookIds,
+        categoryId,
+        publisherId,
+        authorId,
+        shelfLocationId,
+        batchRegistrationKey,
+        quantity: qtyNumber,
+        isUsingDepartment,
+      },
+    });
+  } catch (error) {
+    console.error("Error adding book:", error);
+    res.status(500).json({
+      success: false,
+      message: "Failed to add book",
+      error: error.message,
+    });
+  }
 });
 
 // UPDATE BOOK ROUTE
@@ -550,11 +576,46 @@ router.put("/:batch_registration_key", (req, res) => {
 
       // Update book cover in book_covers table if a new file is uploaded
       if (req.file && req.file.buffer) {
-        book_cover = req.file.buffer;
-        await pool.execute(
-          "UPDATE book_covers SET book_cover = ? WHERE batch_registration_key = ?",
-          [book_cover, batchRegistrationKey]
-        );
+        try {
+          // Upload new book cover to file system
+          const bookCoverExtension = path.extname(req.file.originalname) || '.jpg';
+          const bookCoverFilename = `${batchRegistrationKey}${bookCoverExtension}`;
+          
+          console.log(`Updating book cover: ${bookCoverFilename}`);
+          const bookCoverUpload = await uploadBookCover(
+            req.file.buffer, 
+            bookCoverFilename, 
+            req.file.mimetype
+          );
+          
+          // Rename the uploaded file to use batch registration key
+          if (bookCoverUpload.success && bookCoverUpload.file) {
+            try {
+              await renameUploadedFile('book-cover', bookCoverUpload.file.name, bookCoverFilename);
+              console.log(`Book cover updated and renamed to: ${bookCoverFilename}`);
+            } catch (renameError) {
+              console.warn('Could not rename updated book cover, using generated name:', bookCoverUpload.file.name);
+              // Use the generated filename if rename fails
+              const generatedFilename = bookCoverUpload.file.name;
+              const bookCoverPath = `/book_covers/${generatedFilename}`;
+              await pool.execute(
+                "UPDATE book_covers SET file_path = ? WHERE batch_registration_key = ?",
+                [bookCoverPath, batchRegistrationKey]
+              );
+              return; // Skip the normal file path update below
+            }
+          }
+
+          // Update file path in database
+          const bookCoverPath = `/book_covers/${bookCoverFilename}`;
+          await pool.execute(
+            "UPDATE book_covers SET file_path = ? WHERE batch_registration_key = ?",
+            [bookCoverPath, batchRegistrationKey]
+          );
+        } catch (uploadError) {
+          console.error('Error updating book cover:', uploadError);
+          // Continue without updating cover if upload fails
+        }
       }
 
       if (typeof copiesToRemove === 'string') {
@@ -779,13 +840,25 @@ router.put("/:batch_registration_key", (req, res) => {
   });
 });
 
+// Helper function to delete file via upload endpoint
+const deleteUploadedFile = async (endpoint, filename) => {
+  try {
+    const response = await axios.delete(`${SERVER_BASE_URL}${endpoint}/${filename}`);
+    return response.data;
+  } catch (error) {
+    console.error(`Error deleting file ${filename} from ${endpoint}:`, error.message);
+    return null;
+  }
+};
+
 // DELETE BOOKS BY BATCH REGISTRATION KEY ROUTE
 router.delete('/:batch_registration_key', async (req, res) => {
   try {
     const batchRegistrationKey = req.params.batch_registration_key;
 
+    // Get books and their book cover info before deletion
     const [books] = await pool.execute(
-      'SELECT * FROM books WHERE batch_registration_key = ?',
+      'SELECT book_id FROM books WHERE batch_registration_key = ?',
       [batchRegistrationKey]
     );
 
@@ -796,13 +869,43 @@ router.delete('/:batch_registration_key', async (req, res) => {
       });
     }
 
-    // Delete books first
+    // Get book cover file path
+    const [bookCovers] = await pool.execute(
+      'SELECT file_path FROM book_covers WHERE batch_registration_key = ?',
+      [batchRegistrationKey]
+    );
+
+    // Delete files from file system via upload endpoints
+    const fileDeletePromises = [];
+
+    // Delete book cover if exists
+    if (bookCovers.length > 0 && bookCovers[0].file_path) {
+      const coverFilename = path.basename(bookCovers[0].file_path);
+      console.log(`Deleting book cover: ${coverFilename}`);
+      fileDeletePromises.push(
+        deleteUploadedFile('/api/uploads/book-cover', coverFilename)
+      );
+    }
+
+    // Delete QR codes for each book
+    books.forEach(book => {
+      const qrFilename = `book_id_${book.book_id}_QrCode.png`;
+      console.log(`Deleting QR code: ${qrFilename}`);
+      fileDeletePromises.push(
+        deleteUploadedFile('/api/uploads/qr-code', qrFilename)
+      );
+    });
+
+    // Execute all file deletions
+    await Promise.allSettled(fileDeletePromises);
+
+    // Delete books from database
     await pool.execute(
       'DELETE FROM books WHERE batch_registration_key = ?',
       [batchRegistrationKey]
     );
 
-    // Then delete the book cover
+    // Delete book cover from database
     await pool.execute(
       'DELETE FROM book_covers WHERE batch_registration_key = ?',
       [batchRegistrationKey]
@@ -810,7 +913,7 @@ router.delete('/:batch_registration_key', async (req, res) => {
 
     res.status(200).json({
       success: true,
-      message: 'Books and cover deleted successfully',
+      message: 'Books, cover, and associated files deleted successfully',
       data: {
         batchRegistrationKey,
         deletedCount: books.length,
