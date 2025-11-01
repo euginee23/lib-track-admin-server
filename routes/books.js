@@ -2,6 +2,10 @@ const express = require("express");
 const router = express.Router();
 const { pool } = require("../config/database");
 const QRCode = require("qrcode");
+require('dotenv').config();
+
+// Get upload domain from environment
+const UPLOAD_DOMAIN = (process.env.UPLOAD_DOMAIN || 'https://uploads.codehub.site').replace(/\/+$/, '');
 
 // UNDEFINED VALUE SQL PARAMS HELPER
 function safe(val) {
@@ -15,9 +19,15 @@ router.get("/", async (req, res) => {
       SELECT 
         b.book_id,
         b.book_title,
-        bc.book_cover,
+        CASE 
+          WHEN bc.file_path IS NOT NULL AND bc.file_path != '' THEN CONCAT('${UPLOAD_DOMAIN}', bc.file_path)
+          ELSE NULL 
+        END AS book_cover,
         b.book_number,
-        b.book_qr,
+        CASE 
+          WHEN b.book_qr IS NOT NULL THEN CONCAT('${UPLOAD_DOMAIN}/qr_codes/book_id_', b.book_id, '_QrCode.png')
+          ELSE NULL 
+        END AS book_qr,
         b.book_edition,
         b.book_year,
         b.book_price,
@@ -76,9 +86,15 @@ router.get("/:batch_registration_key", async (req, res) => {
       SELECT 
         b.book_id,
         b.book_title,
-        bc.book_cover,
+        CASE 
+          WHEN bc.file_path IS NOT NULL AND bc.file_path != '' THEN CONCAT('${UPLOAD_DOMAIN}', bc.file_path)
+          ELSE NULL 
+        END AS book_cover,
         b.book_number,
-        b.book_qr,
+        CASE 
+          WHEN b.book_qr IS NOT NULL THEN CONCAT('${UPLOAD_DOMAIN}/qr_codes/book_id_', b.book_id, '_QrCode.png')
+          ELSE NULL 
+        END AS book_qr,
         b.book_edition,
         b.book_year,
         b.book_price,
@@ -163,9 +179,15 @@ router.get("/book/:book_id", async (req, res) => {
       SELECT 
         b.book_id,
         b.book_title,
-        bc.book_cover,
+        CASE 
+          WHEN bc.file_path IS NOT NULL AND bc.file_path != '' THEN CONCAT('${UPLOAD_DOMAIN}', bc.file_path)
+          ELSE NULL 
+        END AS book_cover,
         b.book_number,
-        b.book_qr,
+        CASE 
+          WHEN b.book_qr IS NOT NULL THEN CONCAT('${UPLOAD_DOMAIN}/qr_codes/book_id_', b.book_id, '_QrCode.png')
+          ELSE NULL 
+        END AS book_qr,
         b.book_edition,
         b.book_year,
         b.book_price,
