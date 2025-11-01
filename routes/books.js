@@ -311,54 +311,69 @@ router.get("/book/:book_id", async (req, res) => {
 });
 
 // INSERT BOOKS ROUTE
-router.post("/add", async (req, res) => {
-  try {
-    console.log("Received book data:", req.body);
-
-    const {
-      bookTitle,
-      bookCoverFilename, // Pre-uploaded filename instead of file
-      bookEdition,
-      bookYear,
-      bookPrice,
-      bookDonor,
-      genre,
-      department,
-      useDepartmentInstead,
-      publisher,
-      publishers,
-      author,
-      authors,
-      bookShelfLocId,
-      quantity = 1,
-      batchRegistrationKey, // Use provided batch key from frontend
-    } = req.body;
-
-    console.log("Authors data:", {
-      author: author,
-      authors: authors,
-      authorsType: typeof authors,
-      authorsIsArray: Array.isArray(authors)
-    });
-    console.log("Publishers data:", {
-      publisher: publisher,
-      publishers: publishers,
-      publishersType: typeof publishers,
-      publishersIsArray: Array.isArray(publishers)
-    });
-
-    // VALIDATION
-    const isUsingDepartment = useDepartmentInstead === 'true' || useDepartmentInstead === true;
-    const categoryValue = isUsingDepartment ? department : genre;
-    
-    if (!categoryValue || !publisher || !author || !bookShelfLocId || !bookCoverFilename || !batchRegistrationKey) {
+router.post("/add", (req, res) => {
+  const upload = req.upload.single("bookCover");
+  upload(req, res, async (err) => {
+    if (err) {
+      console.error("File upload error:", err);
       return res.status(400).json({
         success: false,
-        message: "Missing required fields",
-        error:
-          `${isUsingDepartment ? 'department' : 'genre'}, publisher, author, bookShelfLocId, book cover, and batch registration key are required and cannot be null.`,
+        message: "File upload error",
+        error: err.message,
       });
     }
+
+    try {
+      console.log("Received book data:", req.body);
+      console.log("Received file:", req.file ? {
+        originalname: req.file.originalname,
+        mimetype: req.file.mimetype,
+        size: req.file.size
+      } : null);
+
+      const {
+        bookTitle,
+        bookEdition,
+        bookYear,
+        bookPrice,
+        bookDonor,
+        genre,
+        department,
+        useDepartmentInstead,
+        publisher,
+        publishers,
+        author,
+        authors,
+        bookShelfLocId,
+        quantity = 1,
+        batchRegistrationKey,
+      } = req.body;
+
+      console.log("Authors data:", {
+        author: author,
+        authors: authors,
+        authorsType: typeof authors,
+        authorsIsArray: Array.isArray(authors)
+      });
+      console.log("Publishers data:", {
+        publisher: publisher,
+        publishers: publishers,
+        publishersType: typeof publishers,
+        publishersIsArray: Array.isArray(publishers)
+      });
+
+      // VALIDATION
+      const isUsingDepartment = useDepartmentInstead === 'true' || useDepartmentInstead === true;
+      const categoryValue = isUsingDepartment ? department : genre;
+      
+      if (!categoryValue || !publisher || !author || !bookShelfLocId || !req.file || !batchRegistrationKey) {
+        return res.status(400).json({
+          success: false,
+          message: "Missing required fields",
+          error:
+            `${isUsingDepartment ? 'department' : 'genre'}, publisher, author, bookShelfLocId, book cover, and batch registration key are required and cannot be null.`,
+        });
+      }
 
     // MUST BE A POSITIVE NUMBER
     const qtyNumber = parseInt(quantity);
@@ -443,7 +458,20 @@ router.post("/add", async (req, res) => {
     const bookIds = [];
     const now = new Date();
 
-    // Insert book cover record with file path (file already uploaded with correct name)
+    // Upload book cover to file system using the server-side upload function
+    const fileExtension = path.extname(req.file.originalname) || '.jpg';
+    const bookCoverFilename = `${batchRegistrationKey}${fileExtension}`;
+    
+    console.log(`Uploading book cover: ${bookCoverFilename}`);
+    const bookCoverUpload = await uploadBookCover(
+      req.file.buffer, 
+      bookCoverFilename, 
+      req.file.mimetype
+    );
+    
+    console.log('Book cover uploaded to VPS:', bookCoverUpload);
+
+    // Insert book cover record with file path
     const bookCoverPath = `/book_covers/${bookCoverFilename}`;
     await pool.execute(
       `INSERT INTO book_covers (batch_registration_key, file_path, created_at) VALUES (?, ?, ?)`,
@@ -525,14 +553,15 @@ router.post("/add", async (req, res) => {
         isUsingDepartment,
       },
     });
-  } catch (error) {
-    console.error("Error adding book:", error);
-    res.status(500).json({
-      success: false,
-      message: "Failed to add book",
-      error: error.message,
-    });
-  }
+    } catch (error) {
+      console.error("Error adding book:", error);
+      res.status(500).json({
+        success: false,
+        message: "Failed to add book",
+        error: error.message,
+      });
+    }
+  });
 });
 
 // UPDATE BOOK ROUTE
@@ -858,7 +887,7 @@ router.delete('/:batch_registration_key', async (req, res) => {
 
     // Get books and their book cover info before deletion
     const [books] = await pool.execute(
-      'SELECT book_id FROM books WHERE batch_registration_key = ?',
+      'SELECT book_id, book_qr FROM books WHERE batch_registration_key = ?',
       [batchRegistrationKey]
     );
 
@@ -889,11 +918,14 @@ router.delete('/:batch_registration_key', async (req, res) => {
 
     // Delete QR codes for each book
     books.forEach(book => {
-      const qrFilename = `book_id_${book.book_id}_QrCode.png`;
-      console.log(`Deleting QR code: ${qrFilename}`);
-      fileDeletePromises.push(
-        deleteUploadedFile('/api/uploads/qr-code', qrFilename)
-      );
+      if (book.book_qr) {
+        // Extract filename from the stored path (e.g., /qr_codes/book_id_553_QrCode.png)
+        const qrFilename = path.basename(book.book_qr);
+        console.log(`Deleting QR code: ${qrFilename} (from path: ${book.book_qr})`);
+        fileDeletePromises.push(
+          deleteUploadedFile('/api/uploads/qr-code', qrFilename)
+        );
+      }
     });
 
     // Execute all file deletions
