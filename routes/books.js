@@ -606,44 +606,55 @@ router.put("/:batch_registration_key", (req, res) => {
       // Update book cover in book_covers table if a new file is uploaded
       if (req.file && req.file.buffer) {
         try {
-          // Upload new book cover to file system
-          const bookCoverExtension = path.extname(req.file.originalname) || '.jpg';
-          const bookCoverFilename = `${batchRegistrationKey}${bookCoverExtension}`;
+          // Get the existing book cover filename to preserve it (same as DELETE)
+          const [existingCover] = await pool.execute(
+            'SELECT file_path FROM book_covers WHERE batch_registration_key = ?',
+            [batchRegistrationKey]
+          );
+
+          let bookCoverFilename;
           
-          console.log(`Updating book cover: ${bookCoverFilename}`);
+          if (existingCover.length > 0 && existingCover[0].file_path) {
+            // Use the existing filename to replace the old file (same as DELETE)
+            bookCoverFilename = path.basename(existingCover[0].file_path);
+            console.log(`Keeping existing filename for book cover: ${bookCoverFilename}`);
+            
+            // Delete the old file first (same as DELETE)
+            console.log(`Deleting old book cover: ${bookCoverFilename}`);
+            await deleteUploadedFile('/api/uploads/book-cover', bookCoverFilename);
+          } else {
+            // No existing cover, create new filename (same as ADD)
+            const fileExtension = path.extname(req.file.originalname) || '.jpg';
+            bookCoverFilename = `${batchRegistrationKey}${fileExtension}`;
+            console.log(`Creating new book cover filename: ${bookCoverFilename}`);
+          }
+          
+          // Upload the new book cover with the preserved/new filename (same as ADD)
+          console.log(`Uploading book cover: ${bookCoverFilename}`);
           const bookCoverUpload = await uploadBookCover(
             req.file.buffer, 
             bookCoverFilename, 
             req.file.mimetype
           );
           
-          // Rename the uploaded file to use batch registration key
-          if (bookCoverUpload.success && bookCoverUpload.file) {
-            try {
-              await renameUploadedFile('book-cover', bookCoverUpload.file.name, bookCoverFilename);
-              console.log(`Book cover updated and renamed to: ${bookCoverFilename}`);
-            } catch (renameError) {
-              console.warn('Could not rename updated book cover, using generated name:', bookCoverUpload.file.name);
-              // Use the generated filename if rename fails
-              const generatedFilename = bookCoverUpload.file.name;
-              const bookCoverPath = `/book_covers/${generatedFilename}`;
-              await pool.execute(
-                "UPDATE book_covers SET file_path = ? WHERE batch_registration_key = ?",
-                [bookCoverPath, batchRegistrationKey]
-              );
-              return; // Skip the normal file path update below
-            }
-          }
-
-          // Update file path in database
+          console.log('Book cover uploaded to VPS:', bookCoverUpload);
+          
+          // Update or insert file path in database
           const bookCoverPath = `/book_covers/${bookCoverFilename}`;
-          await pool.execute(
-            "UPDATE book_covers SET file_path = ? WHERE batch_registration_key = ?",
-            [bookCoverPath, batchRegistrationKey]
-          );
+          
+          if (existingCover.length > 0) {
+            // Update existing record (no need to change file_path since filename stays the same)
+            console.log('Book cover record already exists, no database update needed');
+          } else {
+            // Insert new record (same as ADD)
+            await pool.execute(
+              "INSERT INTO book_covers (batch_registration_key, file_path, created_at) VALUES (?, ?, ?)",
+              [batchRegistrationKey, bookCoverPath, new Date()]
+            );
+          }
         } catch (uploadError) {
           console.error('Error updating book cover:', uploadError);
-          // Continue without updating cover if upload fails
+          throw uploadError; // Throw error instead of continuing silently
         }
       }
 
