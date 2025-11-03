@@ -217,9 +217,9 @@ router.post("/borrow", (req, res) => {
     let receiptImagePath = null;
     if (req.file && req.file.buffer) {
       try {
-        // Generate unique filename for receipt
+        // Generate filename using reference number
         const fileExtension = path.extname(req.file.originalname) || '.jpg';
-        const receiptFilename = `receipt_${reference_number}_${Date.now()}${fileExtension}`;
+        const receiptFilename = `${reference_number}${fileExtension}`;
         
         console.log(`Uploading receipt image: ${receiptFilename}`);
         const receiptUpload = await uploadReceiptImage(
