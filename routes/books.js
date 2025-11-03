@@ -10,7 +10,7 @@ require('dotenv').config();
 
 // Get upload domain from environment
 const UPLOAD_DOMAIN = (process.env.UPLOAD_DOMAIN || 'https://uploads.codehub.site').replace(/\/+$/, '');
-const SERVER_BASE_URL = process.env.SERVER_BASE_URL || 'http://localhost:5000';
+const SERVER_BASE_URL = process.env.SERVER_BASE_URL || 'http://localhost:4000';
 
 // UNDEFINED VALUE SQL PARAMS HELPER
 function safe(val) {

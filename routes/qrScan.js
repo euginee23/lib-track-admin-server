@@ -1,6 +1,10 @@
 const express = require('express');
 const router = express.Router();
 const { pool } = require('../config/database');
+require('dotenv').config();
+
+// Get upload domain from environment
+const UPLOAD_DOMAIN = (process.env.UPLOAD_DOMAIN || 'https://uploads.codehub.site').replace(/\/+$/, '');
 
 // UNIFIED QR CODE SCAN ROUTE
 router.post("/scan", async (req, res) => {
@@ -56,7 +60,10 @@ async function scanBook(match, res) {
     SELECT 
       b.book_id,
       b.book_title,
-      bc.book_cover,
+      CASE 
+        WHEN bc.file_path IS NOT NULL AND bc.file_path != '' THEN CONCAT('${UPLOAD_DOMAIN}', bc.file_path)
+        ELSE NULL 
+      END AS book_cover,
       b.book_number,
       b.book_qr,
       b.book_edition,
@@ -106,11 +113,7 @@ async function scanBook(match, res) {
 
   const book = books[0];
 
-  // Convert binary data to base64 strings
-  if (book.book_cover && Buffer.isBuffer(book.book_cover)) {
-    book.book_cover = book.book_cover.toString('base64');
-  }
-
+  // Convert QR binary data to base64 string (book_cover is now a URL)
   if (book.book_qr && Buffer.isBuffer(book.book_qr)) {
     book.book_qr = book.book_qr.toString('base64');
   }

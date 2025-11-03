@@ -1,10 +1,38 @@
 const express = require("express");
 const router = express.Router();
 const { pool } = require("../config/database");
+const path = require("path");
+const axios = require("axios");
+const FormData = require("form-data");
+require('dotenv').config();
+
+// Get upload domain from environment
+const UPLOAD_DOMAIN = (process.env.UPLOAD_DOMAIN || 'https://uploads.codehub.site').replace(/\/+$/, '');
+const SERVER_BASE_URL = process.env.SERVER_BASE_URL || 'http://localhost:4000';
 
 // UNDEFINED VALUE SQL PARAMS HELPER
 function safe(val) {
   return val === undefined ? null : val;
+}
+
+// Helper function to upload receipt image to file system
+async function uploadReceiptImage(fileBuffer, filename, mimeType) {
+  try {
+    const formData = new FormData();
+    formData.append('file', fileBuffer, { filename, contentType: mimeType });
+    
+    const response = await axios.post(`${SERVER_BASE_URL}/api/uploads/receipt`, formData, {
+      headers: {
+        ...formData.getHeaders(),
+      },
+      timeout: 30000,
+    });
+    
+    return response.data;
+  } catch (error) {
+    console.error('Error uploading receipt image:', error);
+    throw new Error('Failed to upload receipt image to file system');
+  }
 }
 
 // BORROW BOOK ROUTE
@@ -185,8 +213,31 @@ router.post("/borrow", (req, res) => {
       });
     }
 
-    // GET RECEIPT IMAGE BUFFER
-    const receiptImage = req.file ? req.file.buffer : null;
+    // HANDLE RECEIPT IMAGE UPLOAD TO VPS
+    let receiptImagePath = null;
+    if (req.file && req.file.buffer) {
+      try {
+        // Generate unique filename for receipt
+        const fileExtension = path.extname(req.file.originalname) || '.jpg';
+        const receiptFilename = `receipt_${reference_number}_${Date.now()}${fileExtension}`;
+        
+        console.log(`Uploading receipt image: ${receiptFilename}`);
+        const receiptUpload = await uploadReceiptImage(
+          req.file.buffer, 
+          receiptFilename, 
+          req.file.mimetype
+        );
+        
+        console.log('Receipt image uploaded to VPS:', receiptUpload);
+        
+        // Store the file path for database storage
+        receiptImagePath = `/receipts/${receiptFilename}`;
+      } catch (uploadError) {
+        console.error('Error uploading receipt image:', uploadError);
+        // Continue without receipt if upload fails, but log the error
+        receiptImagePath = null;
+      }
+    }
 
     // INSERT MULTIPLE TRANSACTIONS (ONE FOR EACH ITEM)
     const transactionIds = [];
@@ -210,7 +261,7 @@ router.post("/borrow", (req, res) => {
           user_id,
           bookId,
           null,
-          receiptImage,
+          receiptImagePath, // Store file path instead of binary data
           safe(due_date),
           transaction_type,
           transactionDate
@@ -243,7 +294,7 @@ router.post("/borrow", (req, res) => {
           user_id,
           null,
           researchPaperId,
-          receiptImage,
+          receiptImagePath, // Store file path instead of binary data
           safe(due_date),
           transaction_type,
           transactionDate
@@ -273,7 +324,8 @@ router.post("/borrow", (req, res) => {
         transaction_type,
         transaction_date: transactionDate,
         total_items: totalItems,
-        has_receipt: !!receiptImage
+        has_receipt: !!receiptImagePath,
+        receipt_path: receiptImagePath
       }
     });
 

@@ -1,6 +1,10 @@
 const express = require("express");
 const router = express.Router();
 const { pool } = require("../config/database");
+require('dotenv').config();
+
+// Get upload domain from environment
+const UPLOAD_DOMAIN = (process.env.UPLOAD_DOMAIN || 'https://uploads.codehub.site').replace(/\/+$/, '');
 
 // GET ALL TRANSACTIONS
 router.get("/", async (req, res) => {
@@ -33,7 +37,10 @@ router.get("/", async (req, res) => {
         d.department_name,
         d.department_acronym,
         b.book_title,
-        bc.book_cover,
+        CASE 
+          WHEN bc.file_path IS NOT NULL AND bc.file_path != '' THEN CONCAT('${UPLOAD_DOMAIN}', bc.file_path)
+          ELSE NULL 
+        END AS book_cover,
         b.book_number,
         b.isUsingDepartment,
         CASE 
@@ -104,7 +111,10 @@ router.get("/ongoing", async (req, res) => {
         d.department_name,
         d.department_acronym,
         b.book_title,
-        bc.book_cover,
+        CASE 
+          WHEN bc.file_path IS NOT NULL AND bc.file_path != '' THEN CONCAT('${UPLOAD_DOMAIN}', bc.file_path)
+          ELSE NULL 
+        END AS book_cover,
         b.book_number,
         b.isUsingDepartment,
         CASE 
@@ -180,7 +190,10 @@ router.get("/history", async (req, res) => {
         d.department_name,
         d.department_acronym,
         b.book_title,
-        bc.book_cover,
+        CASE 
+          WHEN bc.file_path IS NOT NULL AND bc.file_path != '' THEN CONCAT('${UPLOAD_DOMAIN}', bc.file_path)
+          ELSE NULL 
+        END AS book_cover,
         b.book_number,
         b.isUsingDepartment,
         CASE 
@@ -247,7 +260,10 @@ router.get("/notifications", async (req, res) => {
         d.department_name,
         d.department_acronym,
         b.book_title,
-        bc.book_cover,
+        CASE 
+          WHEN bc.file_path IS NOT NULL AND bc.file_path != '' THEN CONCAT('${UPLOAD_DOMAIN}', bc.file_path)
+          ELSE NULL 
+        END AS book_cover,
         b.book_number,
         b.isUsingDepartment,
         CASE 
@@ -311,7 +327,10 @@ router.get("/:transaction_id", async (req, res) => {
         d.department_name,
         d.department_acronym,
         b.book_title,
-        bc.book_cover,
+        CASE 
+          WHEN bc.file_path IS NOT NULL AND bc.file_path != '' THEN CONCAT('${UPLOAD_DOMAIN}', bc.file_path)
+          ELSE NULL 
+        END AS book_cover,
         b.book_number,
         b.isUsingDepartment,
         CASE 
@@ -374,7 +393,10 @@ router.get("/user/:user_id", async (req, res) => {
         d.department_name,
         d.department_acronym,
         b.book_title,
-        bc.book_cover,
+        CASE 
+          WHEN bc.file_path IS NOT NULL AND bc.file_path != '' THEN CONCAT('${UPLOAD_DOMAIN}', bc.file_path)
+          ELSE NULL 
+        END AS book_cover,
         b.book_number,
         b.isUsingDepartment,
         (SELECT GROUP_CONCAT(ba2.book_author SEPARATOR ', ') FROM book_author ba2 WHERE ba2.book_author_id = b.book_author_id) AS book_authors,
