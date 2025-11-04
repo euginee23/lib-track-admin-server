@@ -96,6 +96,8 @@ app.use('/api/users', require('./user_routes/profile'));
 app.use('/api/uploads', require('./upload/bookCover_Uploads'));
 app.use('/api/uploads', require('./upload/qrCode_Uploads'));
 app.use('/api/uploads', require('./upload/receiptImage_Uploads'));
+app.use('/api/uploads', require('./upload/researchQRCode_Uploads'));
+app.use('/api/uploads', require('./upload/fingerprintTemplate_Uploads'));
 
 // EMAIL VERIFICATION ROUTE
 const { sendVerification } = require("./smtp/sendEmailVerification");
