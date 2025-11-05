@@ -28,6 +28,11 @@ router.get("/", async (req, res) => {
     const [transactions] = await pool.execute(
       `SELECT 
         t.*,
+        CASE 
+          WHEN t.receipt_image IS NOT NULL AND t.receipt_image != '' 
+          THEN CONCAT('${UPLOAD_DOMAIN}', t.receipt_image)
+          ELSE NULL 
+        END AS receipt_image,
         u.first_name,
         u.last_name,
         u.email,
@@ -102,6 +107,11 @@ router.get("/ongoing", async (req, res) => {
     const [transactions] = await pool.execute(
       `SELECT 
         t.*,
+        CASE 
+          WHEN t.receipt_image IS NOT NULL AND t.receipt_image != '' 
+          THEN CONCAT('${UPLOAD_DOMAIN}', t.receipt_image)
+          ELSE NULL 
+        END AS receipt_image,
         u.first_name,
         u.last_name,
         u.email,
@@ -181,6 +191,11 @@ router.get("/history", async (req, res) => {
     const [transactions] = await pool.execute(
       `SELECT 
         t.*,
+        CASE 
+          WHEN t.receipt_image IS NOT NULL AND t.receipt_image != '' 
+          THEN CONCAT('${UPLOAD_DOMAIN}', t.receipt_image)
+          ELSE NULL 
+        END AS receipt_image,
         u.first_name,
         u.last_name,
         u.email,
@@ -251,6 +266,11 @@ router.get("/notifications", async (req, res) => {
     const [transactions] = await pool.execute(
       `SELECT 
         t.*,
+        CASE 
+          WHEN t.receipt_image IS NOT NULL AND t.receipt_image != '' 
+          THEN CONCAT('${UPLOAD_DOMAIN}', t.receipt_image)
+          ELSE NULL 
+        END AS receipt_image,
         u.first_name,
         u.last_name,
         u.email,
@@ -318,6 +338,11 @@ router.get("/:transaction_id", async (req, res) => {
     const [transactions] = await pool.execute(
       `SELECT 
         t.*,
+        CASE 
+          WHEN t.receipt_image IS NOT NULL AND t.receipt_image != '' 
+          THEN CONCAT('${UPLOAD_DOMAIN}', t.receipt_image)
+          ELSE NULL 
+        END AS receipt_image,
         u.first_name,
         u.last_name,
         u.email,
@@ -384,6 +409,11 @@ router.get("/user/:user_id", async (req, res) => {
     const [transactions] = await pool.execute(
       `SELECT 
         t.*,
+        CASE 
+          WHEN t.receipt_image IS NOT NULL AND t.receipt_image != '' 
+          THEN CONCAT('${UPLOAD_DOMAIN}', t.receipt_image)
+          ELSE NULL 
+        END AS receipt_image,
         u.first_name,
         u.last_name,
         u.email,

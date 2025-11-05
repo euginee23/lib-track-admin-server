@@ -3,9 +3,65 @@ const router = express.Router();
 const { pool } = require("../config/database");
 const path = require("path");
 const fs = require("fs");
+const axios = require("axios");
+const FormData = require("form-data");
+require('dotenv').config();
+
+// Get configuration from environment
+const UPLOAD_DOMAIN = (process.env.UPLOAD_DOMAIN || 'https://uploads.codehub.site').replace(/\/+$/, '');
+const SERVER_BASE_URL = process.env.SERVER_BASE_URL || 'http://localhost:4000';
+
 // Helper for null SQL params
 function safe(val) {
   return val === undefined ? null : val;
+}
+
+// Helper function to download receipt image from URL
+async function downloadReceiptImage(receiptUrl) {
+  try {
+    const response = await axios.get(receiptUrl, {
+      responseType: 'arraybuffer',
+      timeout: 30000
+    });
+    return Buffer.from(response.data);
+  } catch (error) {
+    console.error('Error downloading receipt image:', error);
+    throw new Error('Failed to download receipt image');
+  }
+}
+
+// Helper function to upload receipt image to file system
+async function uploadReceiptImage(fileBuffer, filename, mimeType) {
+  try {
+    const formData = new FormData();
+    formData.append('file', fileBuffer, { filename, contentType: mimeType });
+    
+    const response = await axios.post(`${SERVER_BASE_URL}/api/uploads/receipt`, formData, {
+      headers: {
+        ...formData.getHeaders(),
+      },
+      timeout: 30000,
+    });
+    
+    return response.data;
+  } catch (error) {
+    console.error('Error uploading receipt image:', error);
+    throw new Error('Failed to upload receipt image to file system');
+  }
+}
+
+// Helper function to delete receipt image from file system
+async function deleteReceiptImage(filename) {
+  try {
+    await axios.delete(`${SERVER_BASE_URL}/api/uploads/receipt/${filename}`, {
+      timeout: 10000
+    });
+    return true;
+  } catch (error) {
+    console.error('Error deleting receipt image:', error);
+    // Don't throw error, just log it - we can continue even if delete fails
+    return false;
+  }
 }
 
 router.post("/return", (req, res) => {
@@ -250,22 +306,29 @@ router.post("/return", (req, res) => {
         });
       }
 
-      // Always use existing receipt from DB, never handle uploaded files
-      let receiptImage = null;
+      // Get existing receipt path from DB
+      let receiptImagePath = null;
       let receiptStamped = false;
       let stampMethod = "none";
       
-      // Get existing receipt from DB
       const existingReceipt = allTransactions.find(t => t.receipt_image);
       if (existingReceipt && existingReceipt.receipt_image) {
-        receiptImage = existingReceipt.receipt_image;
-        console.log("Found existing receipt in database, will stamp it");
-      }
-      
-      if (receiptImage) {
+        receiptImagePath = existingReceipt.receipt_image;
+        console.log("Found existing receipt path in database:", receiptImagePath);
+        
+        // Extract filename from path (e.g., "/receipts/REF12345.jpg" -> "REF12345.jpg")
+        const receiptFilename = path.basename(receiptImagePath);
+        
         try {
+          // Download the receipt image from URL
+          const receiptUrl = `${UPLOAD_DOMAIN}${receiptImagePath}`;
+          console.log("Downloading receipt from:", receiptUrl);
+          const receiptBuffer = await downloadReceiptImage(receiptUrl);
+          
+          // Apply stamp using sharp
           const sharp = require("sharp");
 
+          // Find stamp image
           const candidates = [
             path.join(process.cwd(), "ReturnedStamp.png"),
             path.join(process.cwd(), "public", "ReturnedStamp.png"),
@@ -286,13 +349,13 @@ router.post("/return", (req, res) => {
             }
           }
 
-          const img = sharp(receiptImage);
-          const meta = await img.metadata();
-          const w = meta.width || 1200;
-          const h = meta.height || 800;
-
           if (stampBuf) {
             console.log(`Using PNG stamp from: ${stampPath}`);
+            
+            const img = sharp(receiptBuffer);
+            const meta = await img.metadata();
+            const w = meta.width || 1200;
+            const h = meta.height || 800;
             
             // Scale stamp to 40% of the smaller dimension for better visibility
             const targetSize = Math.floor(Math.min(w, h) * 0.4);
@@ -313,22 +376,35 @@ router.post("/return", (req, res) => {
                   blend: "over"
                 },
               ])
-              .jpeg({ quality: 90 }) // Use JPEG for smaller file size
+              .jpeg({ quality: 90 })
               .toBuffer();
 
-            receiptImage = stampedBuf;
+            console.log("Receipt stamped successfully, uploading...");
+            
+            // Delete the old receipt file
+            console.log(`Deleting old receipt: ${receiptFilename}`);
+            await deleteReceiptImage(receiptFilename);
+            
+            // Upload the new stamped receipt with the same filename
+            console.log(`Uploading stamped receipt: ${receiptFilename}`);
+            const uploadResult = await uploadReceiptImage(
+              stampedBuf, 
+              receiptFilename, 
+              'image/jpeg'
+            );
+            
+            console.log("Stamped receipt uploaded successfully:", uploadResult);
             receiptStamped = true;
             stampMethod = "png";
-            console.log("Receipt stamped successfully with PNG");
+            // Keep the same path in database
           } else {
-            console.log("No PNG stamp found, saving receipt without stamp");
+            console.log("No PNG stamp found, keeping receipt without stamp");
             stampMethod = "no_stamp";
-            // Keep original receipt image without any stamp
           }
         } catch (e) {
-          console.error("Receipt stamping failed (sharp may be missing or image invalid):", e);
+          console.error("Receipt stamping failed:", e);
           stampMethod = "failed";
-          // If stamping fails we keep the original buffer (receiptImage)
+          // Keep the original receipt path even if stamping fails
         }
       }
       const returnDate = return_date ? new Date(return_date) : new Date();
@@ -336,16 +412,11 @@ router.post("/return", (req, res) => {
       // Process return
       const returnedItems = [];
       for (const t of transactionsToReturn) {
-        // Update transaction status and return_date. The DB does not have an
-        // `updated_at` column, so do not include it in the query. Include
-        // receipt_image only when provided.
+        // Update transaction status and return_date
+        // No need to update receipt_image as it's already stamped in place
         await pool.execute(
-          `UPDATE transactions SET status='Returned', return_date=?${
-            receiptImage ? ", receipt_image=?" : ""
-          } WHERE transaction_id=?`,
-          receiptImage
-            ? [returnDate, receiptImage, t.transaction_id]
-            : [returnDate, t.transaction_id]
+          `UPDATE transactions SET status='Returned', return_date=? WHERE transaction_id=?`,
+          [returnDate, t.transaction_id]
         );
 
         if (t.book_id) {
@@ -383,8 +454,8 @@ router.post("/return", (req, res) => {
         }
       }
 
-      // determine whether there's a receipt either uploaded now or already stored
-      const dbHasReceipt = allTransactions.some((t) => !!t.receipt_image);
+      // Determine whether there's a receipt in the database
+      const dbHasReceipt = !!receiptImagePath;
 
       return res.status(200).json({
         success: true,
@@ -397,7 +468,8 @@ router.post("/return", (req, res) => {
           total_returned: returnedItems.length,
           total_active_before_return: activeTransactions.length,
           penalty_checks: penaltyChecks,
-          has_receipt: Boolean(receiptImage || dbHasReceipt),
+          has_receipt: dbHasReceipt,
+          receipt_url: receiptImagePath ? `${UPLOAD_DOMAIN}${receiptImagePath}` : null,
           receipt_stamped: receiptStamped,
           stamp_method: stampMethod,
         },
