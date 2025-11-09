@@ -39,6 +39,19 @@ router.get("/profile", authenticateToken, async (req, res) => {
     const user = rows[0];
 
     // Prepare user data (same format as login)
+    // Check if user has a registered fingerprint
+    let hasFingerprint = false;
+    try {
+      const [fpRows] = await pool.query(
+        `SELECT fingerprint_id FROM fingerprints WHERE user_id = ? LIMIT 1`,
+        [user.user_id]
+      );
+      hasFingerprint = Array.isArray(fpRows) && fpRows.length > 0;
+    } catch (fpErr) {
+      console.error('Error checking fingerprints for profile:', fpErr);
+      hasFingerprint = false;
+    }
+
     const userData = {
       id: user.user_id,
       firstName: user.first_name,
@@ -47,7 +60,8 @@ router.get("/profile", authenticateToken, async (req, res) => {
       studentId: user.student_id,
       contactNumber: user.contact_number,
       email_verification: user.email_verification,
-      librarian_approval: user.librarian_approval
+      librarian_approval: user.librarian_approval,
+      hasFingerprint: !!hasFingerprint
     };
 
     res.status(200).json({

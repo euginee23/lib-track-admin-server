@@ -581,6 +581,64 @@ router.delete('/:id', async (req, res) => {
   }
 });
 
+// CANCEL RESERVATION (mark as Cancelled; if previously Approved restore resource status)
+router.post('/:id/cancel', async (req, res) => {
+  const reservationId = req.params.id;
+  let conn;
+  try {
+    conn = await pool.getConnection();
+    await conn.beginTransaction();
+
+    // load reservation
+    const [rows] = await conn.execute(
+      'SELECT reservation_id, status, book_id, research_paper_id FROM reservations WHERE reservation_id = ?',
+      [reservationId]
+    );
+
+    if (rows.length === 0) {
+      await conn.release();
+      return res.status(404).json({ success: false, message: 'Reservation not found' });
+    }
+
+    const reservation = rows[0];
+    const prevStatus = reservation.status;
+
+    if (prevStatus === 'Cancelled') {
+      await conn.release();
+      return res.status(400).json({ success: false, message: 'Reservation is already cancelled' });
+    }
+
+    // Update reservation status to Cancelled
+    await conn.execute(
+      'UPDATE reservations SET status = ?, updated_at = NOW() WHERE reservation_id = ?',
+      ['Cancelled', reservationId]
+    );
+
+    // If the reservation was previously Approved, we must restore the resource availability
+    if (prevStatus === 'Approved') {
+      if (reservation.book_id) {
+        await conn.execute('UPDATE books SET status = ? WHERE book_id = ?', ['Available', reservation.book_id]);
+      }
+      if (reservation.research_paper_id) {
+        await conn.execute('UPDATE research_papers SET status = ? WHERE research_paper_id = ?', ['Available', reservation.research_paper_id]);
+      }
+    }
+
+    await conn.commit();
+    await conn.release();
+
+    return res.status(200).json({
+      success: true,
+      message: 'Reservation cancelled successfully',
+      data: { reservation_id: reservationId, previous_status: prevStatus, status: 'Cancelled' }
+    });
+  } catch (error) {
+    console.error('Error cancelling reservation:', error);
+    try { if (conn) { await conn.rollback(); await conn.release(); } } catch (e) {}
+    return res.status(500).json({ success: false, message: 'Failed to cancel reservation', error: error.message });
+  }
+});
+
 // GET USER'S RESERVATIONS
 router.get('/user/:user_id', async (req, res) => {
   try {

@@ -32,6 +32,24 @@ router.post("/login", async (req, res) => {
       return res.status(401).json({ message: "Invalid credentials." });
     }
 
+    // CHECK IF USER HAS A REGISTERED FINGERPRINT
+    let hasFingerprint = false;
+    try {
+      const [fpRows] = await pool.query(
+        `SELECT fingerprint_id FROM fingerprints WHERE user_id = ? LIMIT 1`,
+        [user.user_id]
+      );
+      hasFingerprint = Array.isArray(fpRows) && fpRows.length > 0;
+    } catch (fpErr) {
+      console.error('Error checking fingerprints for user:', fpErr);
+      // don't fail login over fingerprint check — default to false
+      hasFingerprint = false;
+    }
+
+    // normalize to boolean and log for troubleshooting
+    hasFingerprint = !!hasFingerprint;
+    console.debug(`login: user_id=${user.user_id} hasFingerprint=${hasFingerprint}`);
+
     // GENERATE JWT TOKEN
     const tokenPayload = {
       userId: user.user_id,
@@ -53,7 +71,8 @@ router.post("/login", async (req, res) => {
       studentId: user.student_id,
       contactNumber: user.contact_number,
       email_verification: user.email_verification,
-      librarian_approval: user.librarian_approval
+      librarian_approval: user.librarian_approval,
+      hasFingerprint: hasFingerprint
     };
 
   // CHECK IF THE USER IS APPROVED BY THE LIBRARIAN AND EMAIL IS VERIFIED
@@ -71,6 +90,15 @@ router.post("/login", async (req, res) => {
           user: userData,
           token: token
         });
+    }
+
+    // CHECK IF THE USER HAS A REGISTERED FINGERPRINT
+    if (!hasFingerprint) {
+      return res.status(403).json({
+        message: "No fingerprint registered. Please enroll a fingerprint to continue.",
+        user: userData,
+        token: token
+      });
     }
 
   // SUCCESSFUL LOGIN - BOTH EMAIL VERIFIED AND LIBRARIAN APPROVED
