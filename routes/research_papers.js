@@ -89,6 +89,7 @@ router.get('/', async (req, res) => {
         rp.research_paper_qr,
         rp.created_at,
         rp.department_id,
+        rp.status,
         d.department_name,
         GROUP_CONCAT(ra.author_name) AS authors,
         bs.shelf_number,

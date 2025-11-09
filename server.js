@@ -81,6 +81,9 @@ app.use('/api/penalties', require('./kiosk_routes/penalties'));
 // RATING ROUTE
 app.use('/api/rating', require('./kiosk_routes/rate'));
 
+// RESERVATION ROUTE
+app.use('/api/reservations', require('./routes/reserveBookResearch'));
+
 // USER REGISTRATION ROUTE
 app.use('/api/users', require('./user_routes/registration'));
 app.use('/api/users', require('./user_routes/getUsers'));
