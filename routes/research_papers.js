@@ -103,11 +103,57 @@ router.get('/', async (req, res) => {
       ORDER BY rp.research_paper_id DESC
     `, queryParams);
 
-    // CONVERT QR CODE BUFFER TO BASE64 STRING
-    const formattedPapers = papers.map(paper => ({
-      ...paper,
-      research_paper_qr: paper.research_paper_qr ? paper.research_paper_qr.toString('base64') : null
-    }));
+    // Get ratings for all research papers
+    const [ratings] = await pool.execute(`
+      SELECT 
+        r.rating_id,
+        r.research_paper_id,
+        r.user_id,
+        r.star_rating,
+        r.comment,
+        r.created_at as rating_created_at,
+        u.first_name,
+        u.last_name
+      FROM ratings r
+      LEFT JOIN users u ON r.user_id = u.user_id
+      WHERE r.research_paper_id IS NOT NULL
+      ORDER BY r.created_at DESC
+    `);
+
+    // Group ratings by research_paper_id
+    const ratingsMap = {};
+    ratings.forEach(rating => {
+      const key = rating.research_paper_id;
+      if (!ratingsMap[key]) {
+        ratingsMap[key] = [];
+      }
+      ratingsMap[key].push({
+        rating_id: rating.rating_id,
+        user_id: rating.user_id,
+        user_name: rating.first_name && rating.last_name 
+          ? `${rating.first_name} ${rating.last_name}` 
+          : 'Anonymous',
+        star_rating: rating.star_rating,
+        comment: rating.comment,
+        created_at: rating.rating_created_at
+      });
+    });
+
+    // CONVERT QR CODE BUFFER TO BASE64 STRING and add ratings
+    const formattedPapers = papers.map(paper => {
+      const paperRatings = ratingsMap[paper.research_paper_id] || [];
+      const avgRating = paperRatings.length > 0
+        ? paperRatings.reduce((sum, r) => sum + r.star_rating, 0) / paperRatings.length
+        : null;
+
+      return {
+        ...paper,
+        research_paper_qr: paper.research_paper_qr ? paper.research_paper_qr.toString('base64') : null,
+        average_rating: avgRating ? parseFloat(avgRating.toFixed(1)) : null,
+        total_ratings: paperRatings.length,
+        reviews: paperRatings
+      };
+    });
 
     res.status(200).json({
       success: true,
@@ -159,11 +205,45 @@ router.get('/:id', async (req, res) => {
       });
     }
 
+    // Get ratings for this research paper
+    const [ratings] = await pool.execute(`
+      SELECT 
+        r.rating_id,
+        r.user_id,
+        r.star_rating,
+        r.comment,
+        r.created_at as rating_created_at,
+        u.first_name,
+        u.last_name
+      FROM ratings r
+      LEFT JOIN users u ON r.user_id = u.user_id
+      WHERE r.research_paper_id = ?
+      ORDER BY r.created_at DESC
+    `, [req.params.id]);
+
+    const reviews = ratings.map(rating => ({
+      rating_id: rating.rating_id,
+      user_id: rating.user_id,
+      user_name: rating.first_name && rating.last_name 
+        ? `${rating.first_name} ${rating.last_name}` 
+        : 'Anonymous',
+      star_rating: rating.star_rating,
+      comment: rating.comment,
+      created_at: rating.rating_created_at
+    }));
+
+    const avgRating = reviews.length > 0
+      ? reviews.reduce((sum, r) => sum + r.star_rating, 0) / reviews.length
+      : null;
+
     // CONVERT QR CODE BUFFER TO BASE64 STRING
     const paper = papers[0];
     const formattedPaper = {
       ...paper,
-      research_paper_qr: paper.research_paper_qr ? paper.research_paper_qr.toString('base64') : null
+      research_paper_qr: paper.research_paper_qr ? paper.research_paper_qr.toString('base64') : null,
+      average_rating: avgRating ? parseFloat(avgRating.toFixed(1)) : null,
+      total_ratings: reviews.length,
+      reviews: reviews
     };
 
     res.status(200).json({
