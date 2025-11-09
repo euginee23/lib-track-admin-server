@@ -126,11 +126,63 @@ router.get("/", async (req, res) => {
       ORDER BY b.book_id DESC
     `);
 
-    const activeBooksCount = books.filter(b => b.status !== 'Removed').length;
+    // Get ratings for all books grouped by batch_registration_key
+    const [ratings] = await pool.execute(`
+      SELECT 
+        r.rating_id,
+        r.book_id,
+        b.batch_registration_key,
+        r.user_id,
+        r.star_rating,
+        r.comment,
+        r.created_at as rating_created_at,
+        u.first_name,
+        u.last_name
+      FROM ratings r
+      INNER JOIN books b ON r.book_id = b.book_id
+      LEFT JOIN users u ON r.user_id = u.user_id
+      ORDER BY r.created_at DESC
+    `);
+
+    // Group ratings by batch_registration_key
+    const ratingsMap = {};
+    ratings.forEach(rating => {
+      const key = rating.batch_registration_key;
+      if (!ratingsMap[key]) {
+        ratingsMap[key] = [];
+      }
+      ratingsMap[key].push({
+        rating_id: rating.rating_id,
+        user_id: rating.user_id,
+        user_name: rating.first_name && rating.last_name 
+          ? `${rating.first_name} ${rating.last_name}` 
+          : 'Anonymous',
+        star_rating: rating.star_rating,
+        comment: rating.comment,
+        created_at: rating.rating_created_at
+      });
+    });
+
+    // Calculate average rating and attach reviews to books
+    const booksWithRatings = books.map(book => {
+      const bookRatings = ratingsMap[book.batch_registration_key] || [];
+      const avgRating = bookRatings.length > 0
+        ? bookRatings.reduce((sum, r) => sum + r.star_rating, 0) / bookRatings.length
+        : null;
+      
+      return {
+        ...book,
+        average_rating: avgRating ? parseFloat(avgRating.toFixed(1)) : null,
+        total_ratings: bookRatings.length,
+        reviews: bookRatings
+      };
+    });
+
+    const activeBooksCount = booksWithRatings.filter(b => b.status !== 'Removed').length;
     res.status(200).json({
       success: true,
       count: activeBooksCount,
-      data: books,
+      data: booksWithRatings,
     });
   } catch (error) {
     console.error("Error fetching books:", error);
@@ -203,6 +255,42 @@ router.get("/:batch_registration_key", async (req, res) => {
       });
     }
 
+    // Get ratings for this batch
+    const [ratings] = await pool.execute(
+      `
+      SELECT 
+        r.rating_id,
+        r.book_id,
+        r.user_id,
+        r.star_rating,
+        r.comment,
+        r.created_at as rating_created_at,
+        u.first_name,
+        u.last_name
+      FROM ratings r
+      INNER JOIN books b ON r.book_id = b.book_id
+      LEFT JOIN users u ON r.user_id = u.user_id
+      WHERE b.batch_registration_key = ?
+      ORDER BY r.created_at DESC
+      `,
+      [req.params.batch_registration_key]
+    );
+
+    const reviews = ratings.map(rating => ({
+      rating_id: rating.rating_id,
+      user_id: rating.user_id,
+      user_name: rating.first_name && rating.last_name 
+        ? `${rating.first_name} ${rating.last_name}` 
+        : 'Anonymous',
+      star_rating: rating.star_rating,
+      comment: rating.comment,
+      created_at: rating.rating_created_at
+    }));
+
+    const avgRating = reviews.length > 0
+      ? reviews.reduce((sum, r) => sum + r.star_rating, 0) / reviews.length
+      : null;
+
     if (books.length > 0) {
       const [allBooks] = await pool.execute(
         `SELECT * FROM books WHERE batch_registration_key = ?`,
@@ -212,6 +300,9 @@ router.get("/:batch_registration_key", async (req, res) => {
       const bookData = {
         ...books[0],
         quantity: activeBooks.length,
+        average_rating: avgRating ? parseFloat(avgRating.toFixed(1)) : null,
+        total_ratings: reviews.length,
+        reviews: reviews
       };
       res.status(200).json({
         success: true,
@@ -220,7 +311,12 @@ router.get("/:batch_registration_key", async (req, res) => {
     } else {
       res.status(200).json({
         success: true,
-        data: books[0],
+        data: {
+          ...books[0],
+          average_rating: avgRating ? parseFloat(avgRating.toFixed(1)) : null,
+          total_ratings: reviews.length,
+          reviews: reviews
+        },
       });
     }
   } catch (error) {
@@ -296,9 +392,50 @@ router.get("/book/:book_id", async (req, res) => {
       });
     }
 
+    // Get ratings for this book's batch
+    const [ratings] = await pool.execute(
+      `
+      SELECT 
+        r.rating_id,
+        r.book_id,
+        r.user_id,
+        r.star_rating,
+        r.comment,
+        r.created_at as rating_created_at,
+        u.first_name,
+        u.last_name
+      FROM ratings r
+      INNER JOIN books b ON r.book_id = b.book_id
+      LEFT JOIN users u ON r.user_id = u.user_id
+      WHERE b.batch_registration_key = (SELECT batch_registration_key FROM books WHERE book_id = ?)
+      ORDER BY r.created_at DESC
+      `,
+      [book_id]
+    );
+
+    const reviews = ratings.map(rating => ({
+      rating_id: rating.rating_id,
+      user_id: rating.user_id,
+      user_name: rating.first_name && rating.last_name 
+        ? `${rating.first_name} ${rating.last_name}` 
+        : 'Anonymous',
+      star_rating: rating.star_rating,
+      comment: rating.comment,
+      created_at: rating.rating_created_at
+    }));
+
+    const avgRating = reviews.length > 0
+      ? reviews.reduce((sum, r) => sum + r.star_rating, 0) / reviews.length
+      : null;
+
     res.status(200).json({
       success: true,
-      data: books[0],
+      data: {
+        ...books[0],
+        average_rating: avgRating ? parseFloat(avgRating.toFixed(1)) : null,
+        total_ratings: reviews.length,
+        reviews: reviews
+      },
     });
   } catch (error) {
     console.error("Error fetching book by ID:", error);
