@@ -41,6 +41,16 @@ router.get('/', async (req, res) => {
         r.status,
         r.reason,
         r.updated_at,
+        -- Queue position: number of active (Pending/Approved) reservations for the same resource
+        (
+          SELECT COUNT(*) FROM reservations r2
+          WHERE (
+            (r.book_id IS NOT NULL AND r2.book_id = r.book_id)
+            OR (r.research_paper_id IS NOT NULL AND r2.research_paper_id = r.research_paper_id)
+          )
+          AND r2.status IN ('Pending','Approved')
+          AND r2.updated_at <= r.updated_at
+        ) AS queue_position,
         u.first_name,
         u.last_name,
         u.email,
@@ -120,6 +130,7 @@ router.get('/', async (req, res) => {
         status: reservation.status,
         reason: reservation.reason,
         updated_at: reservation.updated_at,
+        position: reservation.queue_position || 1,
         reservation_type: reservation.reservation_type
       };
 
@@ -177,6 +188,15 @@ router.get('/:id', async (req, res) => {
         r.status,
         r.reason,
         r.updated_at,
+        (
+          SELECT COUNT(*) FROM reservations r2
+          WHERE (
+            (r.book_id IS NOT NULL AND r2.book_id = r.book_id)
+            OR (r.research_paper_id IS NOT NULL AND r2.research_paper_id = r.research_paper_id)
+          )
+          AND r2.status IN ('Pending','Approved')
+          AND r2.updated_at <= r.updated_at
+        ) AS queue_position,
         u.first_name,
         u.last_name,
         u.email,
@@ -262,6 +282,7 @@ router.get('/:id', async (req, res) => {
       status: reservation.status,
       reason: reservation.reason,
       updated_at: reservation.updated_at,
+      position: reservation.queue_position || 1,
       reservation_type: reservation.reservation_type
     };
 
@@ -661,6 +682,15 @@ router.get('/user/:user_id', async (req, res) => {
         r.status,
         r.reason,
         r.updated_at,
+        (
+          SELECT COUNT(*) FROM reservations r2
+          WHERE (
+            (r.book_id IS NOT NULL AND r2.book_id = r.book_id)
+            OR (r.research_paper_id IS NOT NULL AND r2.research_paper_id = r.research_paper_id)
+          )
+          AND r2.status IN ('Pending','Approved')
+          AND r2.updated_at <= r.updated_at
+        ) AS queue_position,
         CASE 
           WHEN r.book_id IS NOT NULL THEN 'book'
           WHEN r.research_paper_id IS NOT NULL THEN 'research_paper'
@@ -726,6 +756,7 @@ router.get('/user/:user_id', async (req, res) => {
         status: reservation.status,
         reason: reservation.reason,
         updated_at: reservation.updated_at,
+        position: reservation.queue_position || 1,
         reservation_type: reservation.reservation_type
       };
 
