@@ -65,9 +65,16 @@ app.use('/api/qr', require('./routes/qrScan'));
 // SETTINGS ROUTE
 app.use('/api/settings', require('./routes/settings'));
 
-// KIOSK ROUTES
-app.use('/api/kiosk', require('./kiosk_routes/borrowBook'));
-app.use('/api/kiosk', require('./kiosk_routes/returnBook'));
+// ACTIVITY LOGS ROUTE
+app.use('/api/activity-logs', require('./routes/activityLogs'));
+
+// KIOSK ROUTES (Load but don't use yet - will inject WebSocket after initialization)
+const borrowBookRoute = require('./kiosk_routes/borrowBook');
+const returnBookRoute = require('./kiosk_routes/returnBook');
+const penaltiesRoute = require('./kiosk_routes/penalties');
+
+app.use('/api/kiosk', borrowBookRoute);
+app.use('/api/kiosk', returnBookRoute);
 
 // TRANSACTIONS ROUTE
 app.use('/api/transactions', require('./kiosk_routes/transactions'));
@@ -76,10 +83,16 @@ app.use('/api/transactions', require('./kiosk_routes/transactions'));
 app.use('/api/fines', require('./kiosk_routes/fineCalculation'));
 
 // PENALTIES ROUTE
-app.use('/api/penalties', require('./kiosk_routes/penalties'));
+app.use('/api/penalties', penaltiesRoute);
 
 // RATING ROUTE
 app.use('/api/rating', require('./kiosk_routes/rate'));
+
+// GET RATINGS ROUTE
+app.use('/api/kiosk/ratings', require('./kiosk_routes/getRatings'));
+
+// RULES AND REGULATIONS ROUTE
+app.use('/api/rules', require('./routes/rulesAndRegulations'));
 
 // RESERVATION ROUTE
 app.use('/api/reservations', require('./routes/reserveBookResearch'));
@@ -186,7 +199,17 @@ const server = http.createServer(app);
 // INITIALIZE WEBSOCKET SERVER
 const wsServer = new WebSocketServer(server);
 console.log("✅ WebSocket server started and ready for connections");
-wsServer.broadcast({ message: "Server started" });
+
+// INJECT WEBSOCKET SERVER INTO ROUTES THAT NEED IT
+borrowBookRoute.setWebSocketServer(wsServer);
+returnBookRoute.setWebSocketServer(wsServer);
+penaltiesRoute.setWebSocketServer(wsServer);
+
+wsServer.broadcast({ 
+  type: 'SERVER_STARTED',
+  message: "Library Tracker Server Started",
+  timestamp: new Date().toISOString()
+});
 
 // SERVER
 const startServer = async () => {

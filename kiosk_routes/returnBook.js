@@ -7,6 +7,14 @@ const axios = require("axios");
 const FormData = require("form-data");
 require('dotenv').config();
 
+// WebSocket instance (will be set from server.js)
+let wsServer = null;
+
+// Function to set WebSocket server instance
+router.setWebSocketServer = (ws) => {
+  wsServer = ws;
+};
+
 // Get configuration from environment
 const UPLOAD_DOMAIN = (process.env.UPLOAD_DOMAIN || 'https://uploads.codehub.site').replace(/\/+$/, '');
 const SERVER_BASE_URL = process.env.SERVER_BASE_URL || 'http://localhost:4000';
@@ -457,6 +465,50 @@ router.post("/return", (req, res) => {
       // Determine whether there's a receipt in the database
       const dbHasReceipt = !!receiptImagePath;
 
+      const userName = `${userCheck[0].first_name} ${userCheck[0].last_name}`;
+
+      // BROADCAST WEBSOCKET EVENT FOR BOOK RETURN
+      if (wsServer) {
+        wsServer.broadcast({
+          type: 'BOOK_RETURNED',
+          data: {
+            user_id: transactionUserId,
+            user_name: userName,
+            reference_number: allTransactions[0].reference_number,
+            total_returned: returnedItems.length,
+            returned_items: returnedItems.map(item => ({
+              type: item.type,
+              id: item.id,
+              title: item.item_title
+            })),
+            return_date: returnDate,
+            has_penalties: penaltyChecks.length > 0
+          },
+          timestamp: new Date().toISOString()
+        });
+
+        // SAVE TO ACTIVITY LOG
+        try {
+          const itemDetails = returnedItems.map(item => 
+            `${item.type === 'book' ? 'Book' : 'Research Paper'}: ${item.item_title}`
+          ).join(', ');
+
+          await pool.execute(
+            `INSERT INTO activity_logs (user_id, action, details, status, created_at)
+             VALUES (?, ?, ?, ?, NOW())`,
+            [
+              transactionUserId,
+              'BOOK_RETURNED',
+              `Returned ${returnedItems.length} item(s) - Reference: ${allTransactions[0].reference_number} - Items: ${itemDetails}`,
+              'completed'
+            ]
+          );
+        } catch (logError) {
+          console.error('Error saving activity log:', logError);
+          // Don't fail the request if logging fails
+        }
+      }
+
       return res.status(200).json({
         success: true,
         message: `${returnedItems.length} item(s) returned successfully`,
@@ -464,7 +516,7 @@ router.post("/return", (req, res) => {
           returned_items: returnedItems,
           reference_number: allTransactions[0].reference_number,
           user_id: transactionUserId,
-          user_name: `${userCheck[0].first_name} ${userCheck[0].last_name}`,
+          user_name: userName,
           total_returned: returnedItems.length,
           total_active_before_return: activeTransactions.length,
           penalty_checks: penaltyChecks,

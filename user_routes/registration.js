@@ -13,7 +13,7 @@ router.post("/register", upload.fields([
   { name: "corImage", maxCount: 1 },
   { name: "profileImage", maxCount: 1 }
 ]), async (req, res) => {
-  const {
+  let {
     firstName,
     middleName,
     lastName,
@@ -27,9 +27,20 @@ router.post("/register", upload.fields([
     password
   } = req.body;
 
-  // VALIDATE REQUIRED FIELDS
+  // TRIM ALL STRING INPUTS
+  firstName = firstName?.trim();
+  middleName = middleName?.trim();
+  lastName = lastName?.trim();
+  email = email?.trim();
+  studentId = studentId?.trim();
+  facultyId = facultyId?.trim();
+  contactNumber = contactNumber?.trim();
+  position = position?.trim();
+  password = password?.trim();
+
+  // VALIDATE REQUIRED FIELDS (after trimming)
   if (!firstName || !lastName || !email || !password || !college) {
-    return res.status(400).json({ message: "All required fields must be filled." });
+    return res.status(400).json({ message: "All required fields must be filled and cannot contain only whitespace." });
   }
 
   // VALIDATE POSITION SPECIFIC FIELDS

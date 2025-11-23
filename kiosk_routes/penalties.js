@@ -2,6 +2,14 @@ const express = require("express");
 const router = express.Router();
 const { pool } = require("../config/database");
 
+// WebSocket instance (will be set from server.js)
+let wsServer = null;
+
+// Function to set WebSocket server instance
+router.setWebSocketServer = (ws) => {
+  wsServer = ws;
+};
+
 // UNDEFINED VALUE SQL PARAMS HELPER
 function safe(val) {
   return val === undefined ? null : val;
@@ -393,6 +401,32 @@ router.put("/:penalty_id/pay", async (req, res) => {
     const { penalty_id } = req.params;
     const { payment_method = "manual", notes } = req.body;
 
+    // GET PENALTY DETAILS BEFORE MARKING AS PAID
+    const [penaltyDetails] = await pool.execute(
+      `SELECT 
+        p.*,
+        t.reference_number,
+        CONCAT(u.first_name, ' ', u.last_name) as user_name,
+        b.book_title,
+        rp.research_title
+       FROM penalties p
+       LEFT JOIN transactions t ON p.transaction_id = t.transaction_id
+       LEFT JOIN users u ON p.user_id = u.user_id
+       LEFT JOIN books b ON t.book_id = b.book_id
+       LEFT JOIN research_papers rp ON t.research_paper_id = rp.research_paper_id
+       WHERE p.penalty_id = ?`,
+      [penalty_id]
+    );
+
+    if (penaltyDetails.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: "Penalty not found",
+      });
+    }
+
+    const penalty = penaltyDetails[0];
+
     // Mark penalty as paid by updating its status (preserve fine amount for audit)
     const [result] = await pool.execute(
       `UPDATE penalties 
@@ -408,11 +442,50 @@ router.put("/:penalty_id/pay", async (req, res) => {
       });
     }
 
+    // BROADCAST WEBSOCKET EVENT FOR PENALTY PAYMENT
+    if (wsServer) {
+      wsServer.broadcast({
+        type: 'PENALTY_PAID',
+        data: {
+          penalty_id,
+          user_id: penalty.user_id,
+          user_name: penalty.user_name,
+          transaction_id: penalty.transaction_id,
+          reference_number: penalty.reference_number,
+          fine_amount: penalty.fine,
+          payment_method,
+          item_title: penalty.book_title || penalty.research_title || 'Unknown Item',
+          paid_at: new Date().toISOString()
+        },
+        timestamp: new Date().toISOString()
+      });
+
+      // SAVE TO ACTIVITY LOG
+      try {
+        await pool.execute(
+          `INSERT INTO activity_logs (user_id, action, details, status, created_at)
+           VALUES (?, ?, ?, ?, NOW())`,
+          [
+            penalty.user_id,
+            'PENALTY_PAID',
+            `Paid penalty of ₱${penalty.fine} for Reference: ${penalty.reference_number} - Payment Method: ${payment_method}${notes ? ' - Notes: ' + notes : ''}`,
+            'completed'
+          ]
+        );
+      } catch (logError) {
+        console.error('Error saving activity log:', logError);
+        // Don't fail the request if logging fails
+      }
+    }
+
     res.status(200).json({
       success: true,
       message: "Penalty marked as paid",
       data: {
         penalty_id,
+        user_id: penalty.user_id,
+        user_name: penalty.user_name,
+        fine_amount: penalty.fine,
         payment_method,
         paid_at: new Date().toISOString(),
       },

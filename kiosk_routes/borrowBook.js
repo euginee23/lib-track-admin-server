@@ -6,6 +6,14 @@ const axios = require("axios");
 const FormData = require("form-data");
 require('dotenv').config();
 
+// WebSocket instance (will be set from server.js)
+let wsServer = null;
+
+// Function to set WebSocket server instance
+router.setWebSocketServer = (ws) => {
+  wsServer = ws;
+};
+
 // Get upload domain from environment
 const UPLOAD_DOMAIN = (process.env.UPLOAD_DOMAIN || 'https://uploads.codehub.site').replace(/\/+$/, '');
 const SERVER_BASE_URL = process.env.SERVER_BASE_URL || 'http://localhost:4000';
@@ -310,6 +318,59 @@ router.post("/borrow", (req, res) => {
     }
 
     const totalItems = bookIdsArray.length + researchPaperIdsArray.length;
+
+    // GET USER DETAILS FOR ACTIVITY LOG
+    const [userDetails] = await pool.execute(
+      "SELECT first_name, last_name FROM users WHERE user_id = ?",
+      [user_id]
+    );
+
+    const userName = userDetails.length > 0 
+      ? `${userDetails[0].first_name} ${userDetails[0].last_name}` 
+      : 'Unknown User';
+
+    // BROADCAST WEBSOCKET EVENT FOR BOOK BORROW
+    if (wsServer) {
+      wsServer.broadcast({
+        type: 'BOOK_BORROWED',
+        data: {
+          user_id,
+          user_name: userName,
+          reference_number,
+          book_ids: bookIdsArray,
+          research_paper_ids: researchPaperIdsArray,
+          total_items: totalItems,
+          transaction_date: transactionDate,
+          due_date: safe(due_date)
+        },
+        timestamp: new Date().toISOString()
+      });
+
+      // SAVE TO ACTIVITY LOG
+      try {
+        const itemDetails = [];
+        if (bookIdsArray.length > 0) {
+          itemDetails.push(`${bookIdsArray.length} book(s)`);
+        }
+        if (researchPaperIdsArray.length > 0) {
+          itemDetails.push(`${researchPaperIdsArray.length} research paper(s)`);
+        }
+
+        await pool.execute(
+          `INSERT INTO activity_logs (user_id, action, details, status, created_at)
+           VALUES (?, ?, ?, ?, NOW())`,
+          [
+            user_id,
+            'BOOK_BORROWED',
+            `Borrowed ${itemDetails.join(' and ')} - Reference: ${reference_number}`,
+            'completed'
+          ]
+        );
+      } catch (logError) {
+        console.error('Error saving activity log:', logError);
+        // Don't fail the request if logging fails
+      }
+    }
 
     res.status(201).json({
       success: true,

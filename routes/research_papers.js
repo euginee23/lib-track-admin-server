@@ -91,16 +91,27 @@ router.get('/', async (req, res) => {
         rp.department_id,
         rp.status,
         d.department_name,
-        GROUP_CONCAT(ra.author_name) AS authors,
+        GROUP_CONCAT(DISTINCT ra.author_name) AS authors,
         bs.shelf_number,
         bs.shelf_column,
-        bs.shelf_row
+        bs.shelf_row,
+        CONCAT(u.first_name, ' ', u.last_name) AS current_borrower,
+        t.transaction_date AS last_borrowed
       FROM research_papers rp
       LEFT JOIN departments d ON rp.department_id = d.department_id
       LEFT JOIN research_author ra ON rp.research_paper_id = ra.research_paper_id
       LEFT JOIN book_shelf_location bs ON rp.book_shelf_loc_id = bs.book_shelf_loc_id
+      LEFT JOIN (
+        SELECT tr.research_paper_id, tr.user_id, tr.transaction_date
+        FROM transactions tr
+        WHERE tr.research_paper_id IS NOT NULL 
+          AND tr.return_date IS NULL
+          AND tr.transaction_type = 'Borrow'
+        ORDER BY tr.transaction_date DESC
+      ) t ON rp.research_paper_id = t.research_paper_id
+      LEFT JOIN users u ON t.user_id = u.user_id
       ${whereClause}
-      GROUP BY rp.research_paper_id
+      GROUP BY rp.research_paper_id, u.first_name, u.last_name, t.transaction_date
       ORDER BY rp.research_paper_id DESC
     `, queryParams);
 
@@ -185,17 +196,28 @@ router.get('/:id', async (req, res) => {
         rp.created_at,
         rp.department_id,
         d.department_name,
-        GROUP_CONCAT(ra.author_name) AS authors,
+        GROUP_CONCAT(DISTINCT ra.author_name) AS authors,
         bs.shelf_number,
         bs.shelf_column,
         bs.shelf_row,
-        rp.status
+        rp.status,
+        CONCAT(u.first_name, ' ', u.last_name) AS current_borrower,
+        t.transaction_date AS last_borrowed
       FROM research_papers rp
       LEFT JOIN departments d ON rp.department_id = d.department_id
       LEFT JOIN research_author ra ON rp.research_paper_id = ra.research_paper_id
       LEFT JOIN book_shelf_location bs ON rp.book_shelf_loc_id = bs.book_shelf_loc_id
+      LEFT JOIN (
+        SELECT tr.research_paper_id, tr.user_id, tr.transaction_date
+        FROM transactions tr
+        WHERE tr.research_paper_id IS NOT NULL 
+          AND tr.return_date IS NULL
+          AND tr.transaction_type = 'Borrow'
+        ORDER BY tr.transaction_date DESC
+      ) t ON rp.research_paper_id = t.research_paper_id
+      LEFT JOIN users u ON t.user_id = u.user_id
       WHERE rp.research_paper_id = ?
-      GROUP BY rp.research_paper_id
+      GROUP BY rp.research_paper_id, u.first_name, u.last_name, t.transaction_date
       LIMIT 1
     `, [req.params.id]);
 
