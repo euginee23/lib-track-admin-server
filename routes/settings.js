@@ -952,4 +952,179 @@ router.put("/system-setting/:settingName", async (req, res) => {
   }
 });
 
+// GET KIOSK PIN
+router.get("/kiosk-pin", async (req, res) => {
+  try {
+    const [settings] = await pool.execute(
+      `SELECT kiosk_pin FROM system_settings LIMIT 1`
+    );
+
+    const kioskPin = settings[0]?.kiosk_pin || null;
+
+    res.status(200).json({
+      success: true,
+      hasPin: !!kioskPin,
+      pin: kioskPin, // Only send if needed for verification
+    });
+  } catch (error) {
+    console.error("Error fetching kiosk PIN:", error);
+    res.status(500).json({
+      success: false,
+      message: "Failed to fetch kiosk PIN",
+      error: error.message,
+    });
+  }
+});
+
+// CREATE/UPDATE KIOSK PIN
+router.put("/kiosk-pin", async (req, res) => {
+  const { pin, currentPin } = req.body;
+
+  if (!pin) {
+    return res.status(400).json({
+      success: false,
+      message: "PIN is required",
+    });
+  }
+
+  // Validate PIN format (6 digits)
+  if (!/^\d{6}$/.test(pin)) {
+    return res.status(400).json({
+      success: false,
+      message: "PIN must be exactly 6 digits",
+    });
+  }
+
+  try {
+    // Check if updating existing PIN
+    const [existing] = await pool.execute(
+      `SELECT kiosk_pin FROM system_settings LIMIT 1`
+    );
+
+    const existingPin = existing[0]?.kiosk_pin;
+
+    // If updating, verify current PIN
+    if (existingPin && currentPin !== existingPin) {
+      return res.status(403).json({
+        success: false,
+        message: "Current PIN is incorrect",
+      });
+    }
+
+    // Update the PIN
+    const [result] = await pool.execute(
+      `UPDATE system_settings SET kiosk_pin = ?`,
+      [pin]
+    );
+
+    res.status(200).json({
+      success: true,
+      message: existingPin ? "Kiosk PIN updated successfully" : "Kiosk PIN created successfully",
+      affectedRows: result.affectedRows,
+    });
+  } catch (error) {
+    console.error("Error saving kiosk PIN:", error);
+    res.status(500).json({
+      success: false,
+      message: "Failed to save kiosk PIN",
+      error: error.message,
+    });
+  }
+});
+
+// DELETE KIOSK PIN
+router.delete("/kiosk-pin", async (req, res) => {
+  const { currentPin } = req.body;
+
+  if (!currentPin) {
+    return res.status(400).json({
+      success: false,
+      message: "Current PIN is required for deletion",
+    });
+  }
+
+  try {
+    // Verify current PIN
+    const [existing] = await pool.execute(
+      `SELECT kiosk_pin FROM system_settings LIMIT 1`
+    );
+
+    const existingPin = existing[0]?.kiosk_pin;
+
+    if (!existingPin) {
+      return res.status(404).json({
+        success: false,
+        message: "No PIN is currently set",
+      });
+    }
+
+    if (currentPin !== existingPin) {
+      return res.status(403).json({
+        success: false,
+        message: "Current PIN is incorrect",
+      });
+    }
+
+    // Delete the PIN (set to NULL)
+    const [result] = await pool.execute(
+      `UPDATE system_settings SET kiosk_pin = NULL`
+    );
+
+    res.status(200).json({
+      success: true,
+      message: "Kiosk PIN deleted successfully",
+      affectedRows: result.affectedRows,
+    });
+  } catch (error) {
+    console.error("Error deleting kiosk PIN:", error);
+    res.status(500).json({
+      success: false,
+      message: "Failed to delete kiosk PIN",
+      error: error.message,
+    });
+  }
+});
+
+// VERIFY KIOSK PIN
+router.post("/kiosk-pin/verify", async (req, res) => {
+  const { pin } = req.body;
+
+  if (!pin) {
+    return res.status(400).json({
+      success: false,
+      message: "PIN is required",
+    });
+  }
+
+  try {
+    const [settings] = await pool.execute(
+      `SELECT kiosk_pin FROM system_settings LIMIT 1`
+    );
+
+    const kioskPin = settings[0]?.kiosk_pin;
+
+    if (!kioskPin) {
+      return res.status(404).json({
+        success: false,
+        message: "No PIN is currently set",
+      });
+    }
+
+    const isValid = pin === kioskPin;
+
+    res.status(200).json({
+      success: true,
+      valid: isValid,
+      message: isValid ? "PIN is correct" : "PIN is incorrect",
+    });
+  } catch (error) {
+    console.error("Error verifying kiosk PIN:", error);
+    res.status(500).json({
+      success: false,
+      message: "Failed to verify kiosk PIN",
+      error: error.message,
+    });
+  }
+});
+
 module.exports = router;
