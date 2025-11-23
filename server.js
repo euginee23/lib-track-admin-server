@@ -91,6 +91,9 @@ app.use('/api/rating', require('./kiosk_routes/rate'));
 // GET RATINGS ROUTE
 app.use('/api/kiosk/ratings', require('./kiosk_routes/getRatings'));
 
+// STATS ROUTE
+app.use('/api/stats', require('./kiosk_routes/getStats'));
+
 // RULES AND REGULATIONS ROUTE
 app.use('/api/rules', require('./routes/rulesAndRegulations'));
 
