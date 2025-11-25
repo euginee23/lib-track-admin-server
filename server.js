@@ -114,6 +114,12 @@ app.use('/api/users', require('./user_routes/profile'));
 // NOTIFICATIONS ROUTE
 app.use('/api/notifications', require('./user_routes/notifications'));
 
+// ADMIN MANAGEMENT ROUTE
+app.use('/api/admins', require('./routes/manageAdmins'));
+
+// ADMIN LOGIN ROUTE
+app.use('/api/admin', require('./routes/adminLogin'));
+
 // FILE UPLOAD ROUTE
 app.use('/api/uploads', require('./upload/bookCover_Uploads'));
 app.use('/api/uploads', require('./upload/qrCode_Uploads'));
