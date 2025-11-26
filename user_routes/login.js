@@ -94,10 +94,12 @@ router.post("/login", async (req, res) => {
 
     // CHECK IF THE USER HAS A REGISTERED FINGERPRINT
     if (!hasFingerprint) {
-      return res.status(403).json({
-        message: "No fingerprint registered. Please enroll a fingerprint to continue.",
+      // Allow login but inform user about missing fingerprint
+      return res.status(200).json({
+        message: "Login successful. No fingerprint registered yet.",
         user: userData,
-        token: token
+        token: token,
+        warning: "Please enroll a fingerprint to use the kiosk system."
       });
     }
 
