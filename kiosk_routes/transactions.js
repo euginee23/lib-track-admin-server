@@ -221,6 +221,7 @@ router.get("/notifications", async (req, res) => {
       LEFT JOIN departments rd ON rp.department_id = rd.department_id
       WHERE t.transaction_type = 'borrow' 
         AND t.due_date IS NOT NULL
+        AND t.status != 'Returned'
         AND DATEDIFF(STR_TO_DATE(t.due_date, '%Y-%m-%d'), CURDATE()) <= 1
       ORDER BY days_remaining ASC, t.transaction_date DESC`
     );

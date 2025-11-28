@@ -191,6 +191,7 @@ router.get("/user/:user_id", async (req, res) => {
       WHERE t.user_id = ? 
         AND t.transaction_type = 'borrow'
         AND t.due_date IS NOT NULL
+        AND t.status != 'Returned'
       ORDER BY t.due_date ASC`,
       [user_id]
     );
@@ -281,7 +282,7 @@ router.get("/transaction/:transaction_id", async (req, res) => {
       LEFT JOIN departments d ON u.department_id = d.department_id
       LEFT JOIN books b ON t.book_id = b.book_id
       LEFT JOIN research_papers rp ON t.research_paper_id = rp.research_paper_id
-      WHERE t.transaction_id = ?`,
+      WHERE t.transaction_id = ? AND t.status != 'Returned'`,
       [transaction_id]
     );
 
