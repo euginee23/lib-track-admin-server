@@ -80,31 +80,51 @@ const calculateTransactionFine = async (transaction, systemSettings = null) => {
       };
     }
 
-  const dueDate = new Date(transaction.due_date);
+  // Validate transaction date and calculate allowed return period
   const currentDate = new Date();
-
   const currentDateLocalMidnight = new Date(currentDate.getFullYear(), currentDate.getMonth(), currentDate.getDate());
-  const dueDateLocalMidnight = new Date(dueDate.getFullYear(), dueDate.getMonth(), dueDate.getDate());
+  
+  // Check if transaction has transaction_date
+  if (!transaction.transaction_date) {
+    return {
+      fine: 0,
+      daysOverdue: 0,
+      status: 'no_transaction_date',
+      message: 'No transaction date available for calculation'
+    };
+  }
 
+  const transactionDate = new Date(transaction.transaction_date);
+  const transactionDateLocalMidnight = new Date(transactionDate.getFullYear(), transactionDate.getMonth(), transactionDate.getDate());
+
+  // Determine user type and get allowed borrow days
+  const isStudent = !transaction.position || transaction.position === 'Student';
+  const allowedDays = isStudent ? systemSettings.student_borrow_days : systemSettings.faculty_borrow_days;
+  const dailyFine = isStudent ? systemSettings.student_daily_fine : systemSettings.faculty_daily_fine;
+
+  // Calculate the allowed return date (transaction date + allowed borrowing days)
+  const allowedReturnDate = new Date(transactionDateLocalMidnight);
+  allowedReturnDate.setDate(allowedReturnDate.getDate() + allowedDays);
+
+  // Calculate days from transaction date to current date
   const MS_PER_DAY = 1000 * 3600 * 24;
-  const daysDifference = Math.floor((currentDateLocalMidnight.getTime() - dueDateLocalMidnight.getTime()) / MS_PER_DAY);
-
-    // Determine user type and get allowed borrow days
-    const isStudent = !transaction.position || transaction.position === 'Student';
-    const allowedDays = isStudent ? systemSettings.student_borrow_days : systemSettings.faculty_borrow_days;
-    const dailyFine = isStudent ? systemSettings.student_daily_fine : systemSettings.faculty_daily_fine;
-
-    // Calculate actual overdue days (days beyond the allowed borrowing period)
-    const actualOverdueDays = Math.max(0, daysDifference - allowedDays);
+  const daysSinceTransaction = Math.floor((currentDateLocalMidnight.getTime() - transactionDateLocalMidnight.getTime()) / MS_PER_DAY);
+  
+  // Calculate actual overdue days (days beyond the allowed borrowing period)
+  const actualOverdueDays = Math.max(0, daysSinceTransaction - allowedDays);
 
     if (actualOverdueDays <= 0) {
       return {
         fine: 0,
         daysOverdue: 0,
         status: 'on_time',
-        message: daysDifference <= 0 ? 'Item not yet due' : `Item within allowed ${allowedDays}-day period`,
+        message: daysSinceTransaction < allowedDays ? 
+          `Item within allowed ${allowedDays}-day borrowing period (${daysSinceTransaction}/${allowedDays} days used)` : 
+          `Item returned exactly on allowed return date`,
         allowedDays: allowedDays,
-        daysPastDue: Math.max(0, daysDifference)
+        daysSinceTransaction: daysSinceTransaction,
+        transactionDate: transaction.transaction_date,
+        allowedReturnDate: allowedReturnDate.toISOString().split('T')[0]
       };
     }
     
@@ -124,10 +144,11 @@ const calculateTransactionFine = async (transaction, systemSettings = null) => {
       dailyFine: dailyFine,
       userType: isStudent ? 'student' : 'faculty',
       status: 'overdue',
-      message: `${actualOverdueDays} day${actualOverdueDays > 1 ? 's' : ''} overdue at ₱${dailyFine}/day (${allowedDays} days allowed)`,
+      message: `${actualOverdueDays} day${actualOverdueDays > 1 ? 's' : ''} overdue at ₱${dailyFine}/day (${allowedDays} days allowed, should have been returned by ${allowedReturnDate.toISOString().split('T')[0]})`,
       allowedDays: allowedDays,
-      daysPastDue: daysDifference,
-      totalDaysFromDue: daysDifference
+      daysSinceTransaction: daysSinceTransaction,
+      transactionDate: transaction.transaction_date,
+      allowedReturnDate: allowedReturnDate.toISOString().split('T')[0]
     };
 
   } catch (error) {
@@ -307,14 +328,14 @@ router.get("/overdue", async (req, res) => {
     const systemSettings = await getSystemSettings();
 
     // Build query conditions - only get transactions that are beyond the allowed borrowing period
-    // For students: due_date + student_borrow_days < current_date
-    // For faculty: due_date + faculty_borrow_days < current_date
-    let whereClause = `WHERE t.transaction_type = 'borrow' AND t.due_date IS NOT NULL AND (
+    // For students: transaction_date + student_borrow_days < current_date
+    // For faculty: transaction_date + faculty_borrow_days < current_date
+    let whereClause = `WHERE t.transaction_type = 'borrow' AND t.transaction_date IS NOT NULL AND t.status != 'Returned' AND (
       (CASE 
         WHEN (u.position IS NULL OR u.position = 'Student') THEN 
-          DATE_ADD(STR_TO_DATE(t.due_date, '%Y-%m-%d'), INTERVAL ${systemSettings.student_borrow_days} DAY) < CURDATE()
+          DATE_ADD(DATE(t.transaction_date), INTERVAL ${systemSettings.student_borrow_days} DAY) < CURDATE()
         ELSE 
-          DATE_ADD(STR_TO_DATE(t.due_date, '%Y-%m-%d'), INTERVAL ${systemSettings.faculty_borrow_days} DAY) < CURDATE()
+          DATE_ADD(DATE(t.transaction_date), INTERVAL ${systemSettings.faculty_borrow_days} DAY) < CURDATE()
       END)
     )`;
     let queryParams = [];

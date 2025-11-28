@@ -650,7 +650,7 @@ router.post("/process-overdue", async (req, res) => {
       `SELECT 
         t.*,
         u.position,
-        DATEDIFF(CURDATE(), STR_TO_DATE(t.due_date, '%Y-%m-%d')) as days_past_due,
+        DATEDIFF(CURDATE(), DATE(t.transaction_date)) as days_since_transaction,
         CASE 
           WHEN (u.position IS NULL OR u.position = 'Student') THEN ${systemSettings.student_borrow_days}
           ELSE ${systemSettings.faculty_borrow_days}
@@ -658,16 +658,17 @@ router.post("/process-overdue", async (req, res) => {
       FROM transactions t
       LEFT JOIN users u ON t.user_id = u.user_id
       WHERE t.transaction_type = 'borrow' 
-        AND t.due_date IS NOT NULL 
+        AND t.transaction_date IS NOT NULL 
+        AND t.status != 'Returned'
         AND (
           CASE 
             WHEN (u.position IS NULL OR u.position = 'Student') THEN 
-              DATEDIFF(CURDATE(), STR_TO_DATE(t.due_date, '%Y-%m-%d')) > ${systemSettings.student_borrow_days}
+              DATEDIFF(CURDATE(), DATE(t.transaction_date)) > ${systemSettings.student_borrow_days}
             ELSE 
-              DATEDIFF(CURDATE(), STR_TO_DATE(t.due_date, '%Y-%m-%d')) > ${systemSettings.faculty_borrow_days}
+              DATEDIFF(CURDATE(), DATE(t.transaction_date)) > ${systemSettings.faculty_borrow_days}
           END
         )
-      ORDER BY t.due_date ASC`
+      ORDER BY t.transaction_date ASC`
     );
 
     let updatedCount = 0;
@@ -683,7 +684,7 @@ router.post("/process-overdue", async (req, res) => {
           : systemSettings.faculty_daily_fine;
 
         // Calculate actual overdue days (days beyond allowed borrowing period)
-        const actualOverdueDays = Math.max(0, transaction.days_past_due - transaction.allowed_days);
+        const actualOverdueDays = Math.max(0, transaction.days_since_transaction - transaction.allowed_days);
         const totalFine = actualOverdueDays * dailyFine;
 
         // Try to create penalty record
@@ -758,16 +759,17 @@ router.post("/recalculate", async (req, res) => {
       FROM transactions t
       LEFT JOIN users u ON t.user_id = u.user_id
       WHERE t.transaction_type = 'borrow'
-        AND t.due_date IS NOT NULL
+        AND t.transaction_date IS NOT NULL
+        AND t.status != 'Returned'
         AND (
           CASE 
             WHEN (u.position IS NULL OR u.position = 'Student') THEN 
-              DATEDIFF(CURDATE(), STR_TO_DATE(t.due_date, '%Y-%m-%d')) > ${systemSettings.student_borrow_days}
+              DATEDIFF(CURDATE(), DATE(t.transaction_date)) > ${systemSettings.student_borrow_days}
             ELSE 
-              DATEDIFF(CURDATE(), STR_TO_DATE(t.due_date, '%Y-%m-%d')) > ${systemSettings.faculty_borrow_days}
+              DATEDIFF(CURDATE(), DATE(t.transaction_date)) > ${systemSettings.faculty_borrow_days}
           END
         )
-      ORDER BY t.due_date ASC`
+      ORDER BY t.transaction_date ASC`
     );
 
     for (const transaction of overdueTransactions) {
@@ -780,13 +782,13 @@ router.post("/recalculate", async (req, res) => {
           ? systemSettings.student_daily_fine
           : systemSettings.faculty_daily_fine;
 
-        // Calculate days overdue using SQL-like approach (server date)
+        // Calculate days since transaction using SQL-like approach (server date)
         const [daysRow] = await pool.execute(
-          `SELECT DATEDIFF(CURDATE(), STR_TO_DATE(?, '%Y-%m-%d')) as days_past_due`,
-          [transaction.due_date]
+          `SELECT DATEDIFF(CURDATE(), DATE(?)) as days_since_transaction`,
+          [transaction.transaction_date]
         );
-        const daysPastDue = (daysRow[0] && daysRow[0].days_past_due) || 0;
-        const actualOverdueDays = Math.max(0, daysPastDue - transaction.allowed_days);
+        const daysSinceTransaction = (daysRow[0] && daysRow[0].days_since_transaction) || 0;
+        const actualOverdueDays = Math.max(0, daysSinceTransaction - transaction.allowed_days);
         const totalFine = actualOverdueDays * dailyFine;
 
         // Find latest penalty for this transaction/user (any date)
@@ -873,9 +875,9 @@ router.post("/mark-as-lost", async (req, res) => {
             u.position,
             b.book_price,
             CASE 
-              WHEN t.due_date IS NOT NULL THEN DATEDIFF(CURDATE(), STR_TO_DATE(t.due_date, '%Y-%m-%d'))
+              WHEN t.transaction_date IS NOT NULL THEN DATEDIFF(CURDATE(), DATE(t.transaction_date))
               ELSE 0
-            END as days_past_due,
+            END as days_since_transaction,
             CASE 
               WHEN (u.position IS NULL OR u.position = 'Student') THEN ${systemSettings.student_borrow_days}
               ELSE ${systemSettings.faculty_borrow_days}
@@ -899,12 +901,12 @@ router.post("/mark-as-lost", async (req, res) => {
         
         // Calculate overdue fine if any (only for days beyond allowed borrowing period)
         let overdueFine = 0;
-        if (transaction.days_past_due > transaction.allowed_days) {
+        if (transaction.days_since_transaction > transaction.allowed_days) {
           const isStudent = !transaction.position || transaction.position === "Student";
           const dailyFine = isStudent 
             ? systemSettings.student_daily_fine 
             : systemSettings.faculty_daily_fine;
-          const actualOverdueDays = transaction.days_past_due - transaction.allowed_days;
+          const actualOverdueDays = transaction.days_since_transaction - transaction.allowed_days;
           overdueFine = actualOverdueDays * dailyFine;
         }
 
