@@ -1,6 +1,7 @@
 const express = require("express");
 const router = express.Router();
 const { pool } = require("../config/database");
+const moment = require('moment-timezone');
 
 // Helper function to safely handle null values
 function safe(val) {
@@ -28,6 +29,9 @@ router.post("/", async (req, res) => {
       [user_id, action, safe(details), safe(status) || 'completed']
     );
 
+    // Format created_at to Asia/Manila before returning
+    const createdAt = moment().tz('Asia/Manila').format();
+
     res.status(201).json({
       success: true,
       message: "Activity log created successfully",
@@ -37,7 +41,7 @@ router.post("/", async (req, res) => {
         action,
         details: safe(details),
         status: safe(status) || 'completed',
-        created_at: new Date()
+        created_at: createdAt
       }
     });
 
@@ -135,10 +139,16 @@ router.get("/", async (req, res) => {
 
     const [logs] = await pool.execute(logsSql, params);
 
+    // Convert created_at to Asia/Manila timezone (ISO format)
+    const formattedLogs = logs.map(row => ({
+      ...row,
+      created_at: row.created_at ? moment.utc(row.created_at).tz('Asia/Manila').format() : row.created_at
+    }));
+
     res.status(200).json({
       success: true,
       data: {
-        logs,
+        logs: formattedLogs,
         pagination: {
           total,
           limit: parsedLimit,
@@ -212,12 +222,17 @@ router.get("/user/:user_id", async (req, res) => {
 
     const [logs] = await pool.execute(userLogsSql, [user_id]);
 
+    const formattedLogs = logs.map(row => ({
+      ...row,
+      created_at: row.created_at ? moment.utc(row.created_at).tz('Asia/Manila').format() : row.created_at
+    }));
+
     res.status(200).json({
       success: true,
       data: {
         user_id,
         total_activities: total,
-        logs,
+        logs: formattedLogs,
         pagination: {
           total,
           limit: parsedLimit,
@@ -270,9 +285,15 @@ router.get("/:activity_log_id", async (req, res) => {
       });
     }
 
+    const row = logs[0];
+    const formattedRow = {
+      ...row,
+      created_at: row.created_at ? moment.utc(row.created_at).tz('Asia/Manila').format() : row.created_at
+    };
+
     res.status(200).json({
       success: true,
-      data: logs[0]
+      data: formattedRow
     });
 
   } catch (error) {
