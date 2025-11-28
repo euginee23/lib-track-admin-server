@@ -683,6 +683,138 @@ router.post("/recalculate", async (req, res) => {
   }
 });
 
+// MARK TRANSACTION AS LOST - Add book price to penalty
+router.post("/mark-as-lost", async (req, res) => {
+  try {
+    const { transaction_ids } = req.body;
+
+    if (!transaction_ids || !Array.isArray(transaction_ids) || transaction_ids.length === 0) {
+      return res.status(400).json({
+        success: false,
+        message: "Missing or invalid transaction_ids array"
+      });
+    }
+
+    const systemSettings = await getSystemSettings();
+    let processed = 0;
+    let updated = 0;
+    let errors = [];
+
+    for (const transaction_id of transaction_ids) {
+      try {
+        // Get transaction details with book price
+        const [transactions] = await pool.execute(
+          `SELECT 
+            t.transaction_id,
+            t.user_id,
+            t.book_id,
+            t.research_paper_id,
+            t.due_date,
+            u.position,
+            b.book_price,
+            CASE 
+              WHEN t.due_date IS NOT NULL THEN DATEDIFF(CURDATE(), STR_TO_DATE(t.due_date, '%Y-%m-%d'))
+              ELSE 0
+            END as days_overdue
+          FROM transactions t
+          LEFT JOIN users u ON t.user_id = u.user_id
+          LEFT JOIN books b ON t.book_id = b.book_id
+          WHERE t.transaction_id = ?`,
+          [transaction_id]
+        );
+
+        if (transactions.length === 0) {
+          errors.push({
+            transaction_id,
+            error: "Transaction not found"
+          });
+          continue;
+        }
+
+        const transaction = transactions[0];
+        
+        // Calculate overdue fine if any
+        let overdueFine = 0;
+        if (transaction.days_overdue > 0) {
+          const isStudent = !transaction.position || transaction.position === "Student";
+          const dailyFine = isStudent 
+            ? systemSettings.student_daily_fine 
+            : systemSettings.faculty_daily_fine;
+          overdueFine = transaction.days_overdue * dailyFine;
+        }
+
+        // Get book price (default to 0 if null or not a book)
+        const bookPrice = parseFloat(transaction.book_price) || 0;
+
+        // Calculate total fine (overdue fine + book price)
+        const totalFine = overdueFine + bookPrice;
+
+        // Create or update penalty with the total fine
+        const result = await createOrUpdatePenalty(
+          transaction.transaction_id,
+          transaction.user_id,
+          totalFine
+        );
+
+        if (result.created || result.updated) {
+          updated++;
+          
+          // Update book status to "Lost" if it's a book transaction
+          if (transaction.book_id) {
+            await pool.execute(
+              `UPDATE books SET status = 'Lost' WHERE book_id = ?`,
+              [transaction.book_id]
+            );
+          }
+
+          // Send notification to user via WebSocket
+          if (wsServer && wsServer.io) {
+            wsServer.io.emit('user_notification', {
+              user_id: transaction.user_id,
+              type: 'lost_book',
+              title: 'Book Marked as Lost',
+              message: `A book you borrowed has been marked as lost. Book replacement fee (₱${bookPrice.toFixed(2)}) has been added to your account.${overdueFine > 0 ? ` Plus overdue fine: ₱${overdueFine.toFixed(2)}.` : ''} Total fine: ₱${totalFine.toFixed(2)}`,
+              fine_amount: totalFine,
+              book_price: bookPrice,
+              overdue_fine: overdueFine,
+              timestamp: new Date().toISOString(),
+              priority: 'high'
+            });
+          }
+        }
+
+        processed++;
+
+      } catch (error) {
+        console.error(`Error processing transaction ${transaction_id}:`, error);
+        errors.push({
+          transaction_id,
+          error: error.message
+        });
+      }
+    }
+
+    res.status(200).json({
+      success: true,
+      message: "Transactions marked as lost",
+      data: {
+        total_processed: processed,
+        penalties_updated: updated,
+        errors: errors.length,
+        error_details: errors
+      }
+    });
+
+  } catch (error) {
+    console.error("Error marking transactions as lost:", error);
+    res.status(500).json({
+      success: false,
+      message: "Failed to mark transactions as lost",
+      error: error.message
+    });
+  }
+});
+
 // CLEANUP OLD PENALTY RECORDS - Keep only the latest unpaid penalty per transaction/user, preserve all paid penalties
 router.post("/cleanup", async (req, res) => {
   try {
