@@ -123,6 +123,9 @@ app.use('/api/admins', require('./routes/manageAdmins'));
 // ADMIN LOGIN ROUTE
 app.use('/api/admin', require('./routes/adminLogin'));
 
+// DASHBOARD ROUTE
+app.use('/api/dashboard', require('./routes/dashboard'));
+
 // FILE UPLOAD ROUTE
 app.use('/api/uploads', require('./upload/bookCover_Uploads'));
 app.use('/api/uploads', require('./upload/qrCode_Uploads'));

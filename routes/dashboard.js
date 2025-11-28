@@ -1,22 +1,177 @@
 const express = require('express');
 const router = express.Router();
+const { pool } = require('../config/database');
 
-// Mock function to get books and research papers
-const getAllItems = () => {
-  const books = require('./books');
-  const research = require('./research');
-  // In a real app, you'd query your database here
-  // For now, we'll simulate data
-  return {
-    books: [
-      { id: 1, type: "Book", title: "The Great Gatsby", author: "F. Scott Fitzgerald", genre: "Fiction", year: 1925, quantity: 5, shelf: "A1", price: 899.99 },
-      { id: 2, type: "Book", title: "To Kill a Mockingbird", author: "Harper Lee", genre: "Fiction", year: 1960, quantity: 3, shelf: "A2", price: 750.00 }
-    ],
-    research: [
-      { id: 1, type: "Research Paper", title: "Machine Learning Applications", author: "Dr. Maria Santos", department: "Computer Science", year: 2023, quantity: 2, shelf: "R1" }
-    ]
-  };
-};
+// GET /api/dashboard/analytics - Get comprehensive analytics for dashboard
+router.get('/analytics', async (req, res) => {
+  try {
+    const { period = 'all' } = req.query; // 'daily', 'weekly', 'monthly', 'all'
+
+    // prepare dateCondition early so it can be used by subsequent queries
+    let dateCondition = '';
+    switch(period) {
+      case 'daily':
+        dateCondition = "DATE(t.transaction_date) = CURDATE()";
+        break;
+      case 'weekly':
+        dateCondition = "YEARWEEK(t.transaction_date, 1) = YEARWEEK(CURDATE(), 1)";
+        break;
+      case 'monthly':
+        dateCondition = "YEAR(t.transaction_date) = YEAR(CURDATE()) AND MONTH(t.transaction_date) = MONTH(CURDATE())";
+        break;
+      default:
+        dateCondition = '1=1';
+    }
+
+    // 1. Overdue Books and Fines Analytics (apply period filter)
+    const [overdueStats] = await pool.execute(`
+      SELECT 
+        COUNT(DISTINCT t.transaction_id) as overdue_count,
+        SUM(CASE 
+          WHEN DATEDIFF(CURDATE(), STR_TO_DATE(t.due_date, '%Y-%m-%d')) > 0 
+          THEN DATEDIFF(CURDATE(), STR_TO_DATE(t.due_date, '%Y-%m-%d'))
+          ELSE 0 
+        END) as total_overdue_days,
+        COUNT(DISTINCT t.user_id) as users_with_overdue
+      FROM transactions t
+      WHERE t.status = 'Borrowed'
+        AND t.due_date IS NOT NULL
+        AND STR_TO_DATE(t.due_date, '%Y-%m-%d') < CURDATE()
+        AND (${dateCondition})
+    `);
+
+    // 2. Fines Collected
+    // 2. Fines Collected (apply period filter via linked transactions)
+    const [finesStats] = await pool.execute(`
+      SELECT 
+        COUNT(*) as total_paid_penalties,
+        SUM(p.fine) as total_fines_collected,
+        AVG(p.fine) as average_fine
+      FROM penalties p
+      LEFT JOIN transactions t ON p.transaction_id = t.transaction_id
+      WHERE p.status = 'Paid'
+        AND (${dateCondition})
+    `);
+
+    // 3. User Session Analytics (active users by period)
+    const [userSessions] = await pool.execute(`
+      SELECT 
+        COUNT(DISTINCT t.user_id) as active_users,
+        COUNT(DISTINCT CASE WHEN u.position = 'Student' OR u.position IS NULL THEN t.user_id END) as student_users,
+        COUNT(DISTINCT CASE WHEN u.position != 'Student' AND u.position IS NOT NULL THEN t.user_id END) as faculty_users,
+        COUNT(t.transaction_id) as total_transactions
+      FROM transactions t
+      LEFT JOIN users u ON t.user_id = u.user_id
+      WHERE ${dateCondition}
+    `);
+
+    // 4. Top Borrowing Department
+    // 4. Top Borrowing Department (apply period filter)
+    const [topDepartments] = await pool.execute(`
+      SELECT 
+        d.department_name,
+        d.department_acronym,
+        COUNT(t.transaction_id) as borrow_count,
+        COUNT(DISTINCT t.user_id) as unique_borrowers,
+        COUNT(DISTINCT CASE WHEN u.position = 'Student' OR u.position IS NULL THEN t.user_id END) as student_count,
+        COUNT(DISTINCT CASE WHEN u.position != 'Student' AND u.position IS NOT NULL THEN t.user_id END) as faculty_count
+      FROM transactions t
+      LEFT JOIN users u ON t.user_id = u.user_id
+      LEFT JOIN departments d ON u.department_id = d.department_id
+      WHERE d.department_id IS NOT NULL
+        AND (${dateCondition})
+      GROUP BY d.department_id, d.department_name, d.department_acronym
+      ORDER BY borrow_count DESC
+      LIMIT 10
+    `);
+
+    // 5. Top Student Borrowers
+    // 5. Top Student Borrowers (apply period filter)
+    const [topBorrowers] = await pool.execute(`
+      SELECT 
+        u.user_id,
+        CONCAT(u.first_name, ' ', u.last_name) as full_name,
+        u.student_id,
+        u.faculty_id,
+        u.position,
+        d.department_acronym,
+        u.year_level,
+        -- choose the best identifier: user.student_id -> user.faculty_id -> user.user_id
+        COALESCE(u.student_id, u.faculty_id, u.user_id) AS user_identifier,
+        COUNT(t.transaction_id) as borrow_count,
+        COUNT(CASE WHEN t.status = 'Borrowed' THEN 1 END) as currently_borrowed,
+        COUNT(CASE WHEN t.status = 'Returned' THEN 1 END) as returned_count,
+        MAX(t.transaction_date) as last_borrow_date
+      FROM transactions t
+      LEFT JOIN users u ON t.user_id = u.user_id
+      LEFT JOIN departments d ON u.department_id = d.department_id
+      WHERE u.user_id IS NOT NULL
+        AND (${dateCondition})
+      GROUP BY u.user_id, u.first_name, u.last_name, u.student_id, u.faculty_id, u.position, d.department_acronym, u.year_level
+      ORDER BY borrow_count DESC
+      LIMIT 10
+    `);
+
+    // 6. Monthly Trend Data (last 6 months) - ensure months with zero values are included
+    const [monthlyTrend] = await pool.execute(`
+      WITH months AS (
+        SELECT DATE_FORMAT(DATE_SUB(CURDATE(), INTERVAL seq.n MONTH), '%Y-%m') AS month,
+               DATE_FORMAT(DATE_SUB(CURDATE(), INTERVAL seq.n MONTH), '%b %Y') AS month_label
+        FROM (
+          SELECT 0 AS n UNION ALL SELECT 1 UNION ALL SELECT 2
+          UNION ALL SELECT 3 UNION ALL SELECT 4 UNION ALL SELECT 5
+        ) seq
+      )
+      SELECT m.month, m.month_label,
+             COALESCE(t.transaction_count, 0) AS transaction_count,
+             COALESCE(t.unique_users, 0) AS unique_users
+      FROM months m
+      LEFT JOIN (
+        SELECT DATE_FORMAT(transaction_date, '%Y-%m') AS month,
+               COUNT(*) AS transaction_count,
+               COUNT(DISTINCT user_id) AS unique_users
+        FROM transactions
+        WHERE transaction_date >= DATE_SUB(CURDATE(), INTERVAL 6 MONTH)
+        GROUP BY DATE_FORMAT(transaction_date, '%Y-%m')
+      ) t ON t.month = m.month
+      ORDER BY m.month ASC
+    `);
+
+    res.json({
+      success: true,
+      data: {
+        overdue: {
+          count: overdueStats[0]?.overdue_count || 0,
+          totalDays: overdueStats[0]?.total_overdue_days || 0,
+          affectedUsers: overdueStats[0]?.users_with_overdue || 0
+        },
+        fines: {
+          totalCollected: parseFloat(finesStats[0]?.total_fines_collected || 0),
+          totalPenalties: finesStats[0]?.total_paid_penalties || 0,
+          averageFine: parseFloat(finesStats[0]?.average_fine || 0)
+        },
+        userSessions: {
+          period,
+          activeUsers: userSessions[0]?.active_users || 0,
+          students: userSessions[0]?.student_users || 0,
+          faculty: userSessions[0]?.faculty_users || 0,
+          transactions: userSessions[0]?.total_transactions || 0
+        },
+        topDepartments: topDepartments || [],
+        topBorrowers: topBorrowers || [],
+        monthlyTrend: monthlyTrend || []
+      }
+    });
+
+  } catch (error) {
+    console.error('Error fetching dashboard analytics:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to fetch dashboard analytics',
+      message: error.message
+    });
+  }
+});
 
 // GET /api/dashboard/stats - Get dashboard statistics
 router.get('/stats', (req, res) => {
