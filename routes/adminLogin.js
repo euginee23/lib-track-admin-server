@@ -90,4 +90,99 @@ router.post("/login", async (req, res) => {
   }
 });
 
+// UPDATE OWN ACCOUNT ROUTE
+router.put("/account", async (req, res) => {
+  const { adminId, firstName, lastName, email, currentPassword, newPassword } = req.body;
+
+  // VALIDATE REQUIRED FIELDS
+  if (!adminId || !firstName || !lastName || !email || !currentPassword) {
+    return res.status(400).json({ message: "Admin ID, first name, last name, email, and current password are required." });
+  }
+
+  try {
+    // VERIFY ADMIN EXISTS
+    const [adminRows] = await pool.query(
+      `SELECT * FROM administrators WHERE admin_id = ? LIMIT 1`,
+      [adminId]
+    );
+
+    if (adminRows.length === 0) {
+      return res.status(404).json({ message: "Administrator not found." });
+    }
+
+    const admin = adminRows[0];
+
+    // VERIFY CURRENT PASSWORD
+    const passwordMatch = await bcrypt.compare(currentPassword, admin.password_hash);
+    if (!passwordMatch) {
+      return res.status(401).json({ message: "Current password is incorrect." });
+    }
+
+    // CHECK IF EMAIL IS ALREADY TAKEN BY ANOTHER ADMIN
+    if (email !== admin.email) {
+      const [emailCheck] = await pool.query(
+        `SELECT admin_id FROM administrators WHERE email = ? AND admin_id != ? LIMIT 1`,
+        [email, adminId]
+      );
+
+      if (emailCheck.length > 0) {
+        return res.status(409).json({ message: "Email is already in use by another administrator." });
+      }
+    }
+
+    // PREPARE UPDATE QUERY
+    let updateQuery = `UPDATE administrators SET first_name = ?, last_name = ?, email = ?`;
+    let queryParams = [firstName, lastName, email];
+
+    // IF NEW PASSWORD PROVIDED, HASH AND INCLUDE IN UPDATE
+    if (newPassword && newPassword.trim()) {
+      const hashedPassword = await bcrypt.hash(newPassword, 10);
+      updateQuery += `, password_hash = ?`;
+      queryParams.push(hashedPassword);
+    }
+
+    updateQuery += ` WHERE admin_id = ?`;
+    queryParams.push(adminId);
+
+    // EXECUTE UPDATE
+    await pool.query(updateQuery, queryParams);
+
+    // FETCH UPDATED ADMIN DATA
+    const [updatedAdmin] = await pool.query(
+      `SELECT * FROM administrators WHERE admin_id = ? LIMIT 1`,
+      [adminId]
+    );
+
+    const adminData = updatedAdmin[0];
+
+    // RETURN UPDATED ADMIN DATA
+    res.status(200).json({
+      success: true,
+      message: "Account updated successfully.",
+      user: {
+        id: adminData.admin_id,
+        firstName: adminData.first_name,
+        lastName: adminData.last_name,
+        email: adminData.email,
+        role: adminData.role,
+        status: adminData.status,
+        permissions: {
+          dashboard: !!adminData.perm_dashboard,
+          manageBooks: !!adminData.perm_manage_books,
+          bookReservations: !!adminData.perm_book_reservations,
+          manageRegistrations: !!adminData.perm_manage_registrations,
+          bookTransactions: !!adminData.perm_book_transactions,
+          managePenalties: !!adminData.perm_manage_penalties,
+          activityLogs: !!adminData.perm_activity_logs,
+          settings: !!adminData.perm_settings,
+          manageAdministrators: !!adminData.perm_manage_administrators
+        }
+      }
+    });
+  } catch (error) {
+    console.error("Error updating account:", error);
+    res.status(500).json({ message: "Internal server error." });
+  }
+});
+
 module.exports = router;

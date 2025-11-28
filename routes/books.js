@@ -1109,6 +1109,110 @@ router.delete('/:batch_registration_key', async (req, res) => {
   }
 });
 
+// GET BOOK COPY DETAILS AND HISTORY BY BOOK NUMBER
+router.get("/copy/:book_id/:book_number", async (req, res) => {
+  try {
+    const { book_id, book_number } = req.params;
+
+    // GET BOOK COPY DETAILS
+    const [bookDetails] = await pool.execute(
+      `SELECT 
+        b.book_id,
+        b.book_title,
+        b.book_number,
+        b.status,
+        CASE 
+          WHEN b.book_qr IS NOT NULL AND b.book_qr != '' THEN CONCAT('${UPLOAD_DOMAIN}', b.book_qr)
+          ELSE NULL 
+        END AS book_qr,
+        b.book_edition,
+        b.book_year,
+        b.batch_registration_key,
+        CASE 
+          WHEN bc.file_path IS NOT NULL AND bc.file_path != '' THEN CONCAT('${UPLOAD_DOMAIN}', bc.file_path)
+          ELSE NULL 
+        END AS book_cover
+      FROM books b
+      LEFT JOIN book_covers bc ON b.batch_registration_key = bc.batch_registration_key
+      WHERE b.book_id = ? AND b.book_number = ?`,
+      [book_id, book_number]
+    );
+
+    if (bookDetails.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: "Book copy not found"
+      });
+    }
+
+    // GET CURRENT BORROWER INFO
+    const [currentBorrower] = await pool.execute(
+      `SELECT 
+        t.transaction_id,
+        t.transaction_date,
+        t.due_date,
+        u.user_id,
+        u.first_name,
+        u.last_name,
+        u.student_id,
+        u.email,
+        d.department_name,
+        d.department_acronym
+      FROM transactions t
+      LEFT JOIN users u ON t.user_id = u.user_id
+      LEFT JOIN departments d ON u.department_id = d.department_id
+      WHERE t.book_id = ? 
+        AND t.transaction_type = 'Borrow'
+        AND t.return_date IS NULL
+      ORDER BY t.transaction_date DESC
+      LIMIT 1`,
+      [book_id]
+    );
+
+    // GET BORROW HISTORY
+    const [borrowHistory] = await pool.execute(
+      `SELECT 
+        t.transaction_id,
+        t.transaction_type,
+        t.transaction_date,
+        t.due_date,
+        t.return_date,
+        u.user_id,
+        u.first_name,
+        u.last_name,
+        u.student_id,
+        u.email,
+        u.year_level,
+        u.position,
+        d.department_name,
+        d.department_acronym
+      FROM transactions t
+      LEFT JOIN users u ON t.user_id = u.user_id
+      LEFT JOIN departments d ON u.department_id = d.department_id
+      WHERE t.book_id = ?
+      ORDER BY t.transaction_date DESC`,
+      [book_id]
+    );
+
+    res.status(200).json({
+      success: true,
+      data: {
+        bookDetails: bookDetails[0],
+        currentBorrower: currentBorrower.length > 0 ? currentBorrower[0] : null,
+        borrowHistory: borrowHistory
+      }
+    });
+
+  } catch (error) {
+    console.error("Error fetching book copy details:", error);
+    res.status(500).json({
+      success: false,
+      message: "Failed to fetch book copy details",
+      error: error.message
+    });
+  }
+});
+
 
 
 module.exports = router;

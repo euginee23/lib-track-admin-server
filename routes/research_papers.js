@@ -516,4 +516,106 @@ router.delete('/:id', async (req, res) => {
   }
 });
 
+// GET RESEARCH PAPER COPY DETAILS (current borrower and history)
+router.get('/copy/:research_paper_id', async (req, res) => {
+  try {
+    const { research_paper_id } = req.params;
+
+    // GET RESEARCH PAPER DETAILS
+    const [researchDetails] = await pool.execute(
+      `SELECT 
+        rp.research_paper_id,
+        rp.research_title,
+        rp.status,
+        rp.research_paper_qr,
+        rp.year_publication,
+        d.department_name
+      FROM research_papers rp
+      LEFT JOIN departments d ON rp.department_id = d.department_id
+      WHERE rp.research_paper_id = ?`,
+      [research_paper_id]
+    );
+
+    if (researchDetails.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: 'Research paper not found'
+      });
+    }
+
+    // GET CURRENT BORROWER INFO
+    const [currentBorrower] = await pool.execute(
+      `SELECT 
+        t.transaction_id,
+        t.transaction_date,
+        t.due_date,
+        u.user_id,
+        u.first_name,
+        u.last_name,
+        u.student_id,
+        u.email,
+        d.department_name,
+        d.department_acronym
+      FROM transactions t
+      LEFT JOIN users u ON t.user_id = u.user_id
+      LEFT JOIN departments d ON u.department_id = d.department_id
+      WHERE t.research_paper_id = ? 
+        AND t.transaction_type = 'Borrow'
+        AND t.return_date IS NULL
+      ORDER BY t.transaction_date DESC
+      LIMIT 1`,
+      [research_paper_id]
+    );
+
+    // GET BORROW HISTORY
+    const [borrowHistory] = await pool.execute(
+      `SELECT 
+        t.transaction_id,
+        t.transaction_type,
+        t.transaction_date,
+        t.due_date,
+        t.return_date,
+        u.user_id,
+        u.first_name,
+        u.last_name,
+        u.student_id,
+        u.email,
+        u.year_level,
+        u.position,
+        d.department_name,
+        d.department_acronym
+      FROM transactions t
+      LEFT JOIN users u ON t.user_id = u.user_id
+      LEFT JOIN departments d ON u.department_id = d.department_id
+      WHERE t.research_paper_id = ?
+      ORDER BY t.transaction_date DESC`,
+      [research_paper_id]
+    );
+
+    // Format research paper QR code
+    const research = researchDetails[0];
+    const formattedResearch = {
+      ...research,
+      research_paper_qr: research.research_paper_qr ? research.research_paper_qr.toString('base64') : null
+    };
+
+    res.status(200).json({
+      success: true,
+      data: {
+        researchDetails: formattedResearch,
+        currentBorrower: currentBorrower.length > 0 ? currentBorrower[0] : null,
+        borrowHistory: borrowHistory
+      }
+    });
+
+  } catch (error) {
+    console.error('Error fetching research paper copy details:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to fetch research paper copy details',
+      error: error.message
+    });
+  }
+});
+
 module.exports = router;
