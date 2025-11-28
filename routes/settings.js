@@ -765,6 +765,96 @@ router.get("/departments", async (req, res) => {
   }
 });
 
+// CREATE DEPARTMENT
+router.post('/departments', async (req, res) => {
+  const { department_name, department_acronym } = req.body;
+
+  if (!department_name) {
+    return res.status(400).json({ success: false, message: 'Missing required field: department_name' });
+  }
+
+  try {
+    // check for duplicate
+    const [existing] = await pool.execute(
+      `SELECT department_id FROM departments WHERE department_name = ? LIMIT 1`,
+      [department_name]
+    );
+
+    if (existing.length > 0) {
+      return res.status(409).json({ success: false, message: 'Department already exists' });
+    }
+
+    const [result] = await pool.execute(
+      `INSERT INTO departments (department_name, department_acronym, created_at) VALUES (?, ?, NOW())`,
+      [department_name, (department_acronym || '')]
+    );
+
+    const [rows] = await pool.execute(
+      `SELECT department_id, department_name, department_acronym, created_at FROM departments WHERE department_id = ? LIMIT 1`,
+      [result.insertId]
+    );
+
+    res.status(201).json({ success: true, message: 'Department created', data: rows[0] });
+  } catch (error) {
+    console.error('Error creating department:', error);
+    res.status(500).json({ success: false, message: 'Failed to create department', error: error.message });
+  }
+});
+
+// UPDATE DEPARTMENT
+router.put('/departments/:id', async (req, res) => {
+  const { id } = req.params;
+  const { department_name, department_acronym } = req.body;
+
+  if (!id || !department_name) {
+    return res.status(400).json({ success: false, message: 'Missing required fields: id, department_name' });
+  }
+
+  try {
+    const [result] = await pool.execute(
+      `UPDATE departments SET department_name = ?, department_acronym = ? WHERE department_id = ?`,
+      [department_name, (department_acronym || ''), id]
+    );
+
+    if (result.affectedRows === 0) {
+      return res.status(404).json({ success: false, message: 'Department not found' });
+    }
+
+    const [rows] = await pool.execute(
+      `SELECT department_id, department_name, department_acronym, created_at FROM departments WHERE department_id = ? LIMIT 1`,
+      [id]
+    );
+
+    res.status(200).json({ success: true, message: 'Department updated', data: rows[0] });
+  } catch (error) {
+    console.error('Error updating department:', error);
+    res.status(500).json({ success: false, message: 'Failed to update department', error: error.message });
+  }
+});
+
+// DELETE DEPARTMENT
+router.delete('/departments/:id', async (req, res) => {
+  const { id } = req.params;
+
+  if (!id) return res.status(400).json({ success: false, message: 'Missing required parameter: id' });
+
+  try {
+    const [result] = await pool.execute(
+      `DELETE FROM departments WHERE department_id = ?`,
+      [id]
+    );
+
+    if (result.affectedRows === 0) {
+      return res.status(404).json({ success: false, message: 'Department not found' });
+    }
+
+    res.status(200).json({ success: true, message: 'Department deleted' });
+  } catch (error) {
+    console.error('Error deleting department:', error);
+    res.status(500).json({ success: false, message: 'Failed to delete department', error: error.message });
+  }
+});
+
 // FETCH SYSTEM SETTINGS
 router.get("/system-settings", async (req, res) => {
   try {

@@ -3,6 +3,7 @@ const router = express.Router();
 const { pool } = require("../config/database");
 const bcrypt = require("bcryptjs");
 const jwt = require("jsonwebtoken");
+const { logAdminAuth } = require("../helpers/activityLogger");
 
 // ADMIN LOGIN ROUTE
 router.post("/login", async (req, res) => {
@@ -42,6 +43,15 @@ router.post("/login", async (req, res) => {
       `UPDATE administrators SET last_login = NOW() WHERE admin_id = ?`,
       [admin.admin_id]
     );
+
+    // LOG ADMIN LOGIN
+    await logAdminAuth({
+      admin_id: admin.admin_id,
+      action: 'ADMIN_LOGIN',
+      admin_name: `${admin.first_name} ${admin.last_name}`,
+      email: admin.email,
+      ip_address: req.ip || req.connection.remoteAddress
+    });
 
     // GENERATE JWT TOKEN
     const tokenPayload = {
@@ -181,6 +191,35 @@ router.put("/account", async (req, res) => {
     });
   } catch (error) {
     console.error("Error updating account:", error);
+    res.status(500).json({ message: "Internal server error." });
+  }
+});
+
+// ADMIN LOGOUT ROUTE
+router.post("/logout", async (req, res) => {
+  const { adminId, firstName, lastName, email } = req.body;
+
+  // VALIDATE REQUIRED FIELDS
+  if (!adminId || !email) {
+    return res.status(400).json({ message: "Admin ID and email are required." });
+  }
+
+  try {
+    // LOG ADMIN LOGOUT
+    await logAdminAuth({
+      admin_id: adminId,
+      action: 'ADMIN_LOGOUT',
+      admin_name: `${firstName || ''} ${lastName || ''}`.trim() || 'Admin',
+      email: email,
+      ip_address: req.ip || req.connection.remoteAddress
+    });
+
+    res.status(200).json({
+      success: true,
+      message: "Logout successful."
+    });
+  } catch (error) {
+    console.error("Error during admin logout:", error);
     res.status(500).json({ message: "Internal server error." });
   }
 });

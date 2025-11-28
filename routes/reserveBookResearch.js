@@ -1,6 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const { pool } = require('../config/database');
+const { logReservation } = require('../helpers/activityLogger');
 
 // Upload domain for file URLs
 const UPLOAD_DOMAIN = (process.env.UPLOAD_DOMAIN || 'https://uploads.codehub.site').replace(/\/+$/, '');
@@ -426,11 +427,49 @@ router.post('/', async (req, res) => {
       [safe(book_id), safe(research_paper_id), user_id, 'Pending', safe(reason)]
     );
 
+    const reservationId = result.insertId;
+
+    // LOG RESERVATION CREATION
+    try {
+      // Get item title for logging
+      let itemTitle = 'Unknown';
+      let itemType = book_id ? 'book' : 'research_paper';
+      
+      if (book_id) {
+        const [books] = await pool.execute(
+          'SELECT book_title FROM books WHERE book_id = ?',
+          [book_id]
+        );
+        if (books.length > 0) {
+          itemTitle = books[0].book_title;
+        }
+      } else if (research_paper_id) {
+        const [papers] = await pool.execute(
+          'SELECT research_title FROM research_papers WHERE research_paper_id = ?',
+          [research_paper_id]
+        );
+        if (papers.length > 0) {
+          itemTitle = papers[0].research_title;
+        }
+      }
+
+      await logReservation({
+        user_id,
+        action: 'RESERVATION_CREATED',
+        item_type: itemType,
+        item_title: itemTitle,
+        reservation_id: reservationId
+      });
+    } catch (logError) {
+      console.error('Error logging reservation creation:', logError);
+      // Don't fail the request if logging fails
+    }
+
     res.status(201).json({
       success: true,
       message: 'Reservation created successfully',
       data: {
-        reservation_id: result.insertId,
+        reservation_id: reservationId,
         book_id: book_id || null,
         research_paper_id: research_paper_id || null,
         user_id,
@@ -452,7 +491,7 @@ router.post('/', async (req, res) => {
 router.put('/:id', async (req, res) => {
   try {
     const reservationId = req.params.id;
-    const { status, reason } = req.body;
+    const { status, reason, admin_id, admin_name } = req.body;
 
     // VALIDATION
     const validStatuses = ['Pending', 'Approved', 'Rejected'];
@@ -463,9 +502,9 @@ router.put('/:id', async (req, res) => {
       });
     }
 
-    // Check if reservation exists and get book/research paper info
+    // Check if reservation exists and get book/research paper info with user_id
     const [reservations] = await pool.execute(
-      'SELECT reservation_id, status, book_id, research_paper_id FROM reservations WHERE reservation_id = ?',
+      'SELECT reservation_id, status, book_id, research_paper_id, user_id FROM reservations WHERE reservation_id = ?',
       [reservationId]
     );
 
@@ -537,6 +576,53 @@ router.put('/:id', async (req, res) => {
             ['Available', reservation.research_paper_id]
           );
         }
+      }
+    }
+
+    // LOG RESERVATION STATUS CHANGE (if status changed)
+    if (status && status !== reservation.status) {
+      try {
+        let itemTitle = 'Unknown';
+        let itemType = reservation.book_id ? 'book' : 'research_paper';
+        
+        if (reservation.book_id) {
+          const [books] = await pool.execute(
+            'SELECT book_title FROM books WHERE book_id = ?',
+            [reservation.book_id]
+          );
+          if (books.length > 0) {
+            itemTitle = books[0].book_title;
+          }
+        } else if (reservation.research_paper_id) {
+          const [papers] = await pool.execute(
+            'SELECT research_title FROM research_papers WHERE research_paper_id = ?',
+            [reservation.research_paper_id]
+          );
+          if (papers.length > 0) {
+            itemTitle = papers[0].research_title;
+          }
+        }
+
+        let action = 'RESERVATION_UPDATED';
+        if (status === 'Approved') {
+          action = 'RESERVATION_APPROVED';
+        } else if (status === 'Rejected') {
+          action = 'RESERVATION_REJECTED';
+        }
+
+        await logReservation({
+          user_id: reservation.user_id,
+          action,
+          item_type: itemType,
+          item_title: itemTitle,
+          reservation_id: reservationId,
+          admin_id: admin_id || null,
+          admin_name: admin_name || null,
+          reason: reason || null
+        });
+      } catch (logError) {
+        console.error('Error logging reservation status change:', logError);
+        // Don't fail the request if logging fails
       }
     }
 

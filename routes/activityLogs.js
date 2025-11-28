@@ -103,22 +103,37 @@ router.get("/", async (req, res) => {
     const total = countResult[0].total;
 
     // Get activity logs with user details
-    const [logs] = await pool.execute(
-      `SELECT 
+    // Convert limit and offset to integers and clamp to safe ranges
+    let parsedLimit = Number.parseInt(limit, 10);
+    let parsedOffset = Number.parseInt(offset, 10);
+    if (!Number.isFinite(parsedLimit) || parsedLimit <= 0) parsedLimit = 50;
+    if (!Number.isFinite(parsedOffset) || parsedOffset < 0) parsedOffset = 0;
+    // enforce a reasonable max page size
+    const MAX_LIMIT = 1000;
+    if (parsedLimit > MAX_LIMIT) parsedLimit = MAX_LIMIT;
+
+    // Build SQL without parameter placeholders for LIMIT/OFFSET (some MySQL drivers have issues binding them)
+    const logsSql = `SELECT 
         al.*,
-        CONCAT(u.first_name, ' ', u.last_name) as user_name,
-        u.position,
-        u.email,
+        COALESCE(CONCAT(u.first_name, ' ', u.last_name), CONCAT(a.first_name, ' ', a.last_name)) as user_name,
+        COALESCE(u.position, a.role) as position,
+        COALESCE(u.email, a.email) as email,
         d.department_name,
-        d.department_acronym
+        d.department_acronym,
+        CASE
+          WHEN u.user_id IS NOT NULL THEN 'user'
+          WHEN a.admin_id IS NOT NULL THEN 'admin'
+          ELSE 'unknown'
+        END as actor_type
        FROM activity_logs al
        LEFT JOIN users u ON al.user_id = u.user_id
+       LEFT JOIN administrators a ON al.user_id = a.admin_id
        LEFT JOIN departments d ON u.department_id = d.department_id
        ${whereClause}
        ORDER BY al.created_at DESC
-       LIMIT ? OFFSET ?`,
-      [...params, parseInt(limit), parseInt(offset)]
-    );
+       LIMIT ${parsedLimit} OFFSET ${parsedOffset}`;
+
+    const [logs] = await pool.execute(logsSql, params);
 
     res.status(200).json({
       success: true,
@@ -126,9 +141,9 @@ router.get("/", async (req, res) => {
         logs,
         pagination: {
           total,
-          limit: parseInt(limit),
-          offset: parseInt(offset),
-          pages: Math.ceil(total / limit)
+          limit: parsedLimit,
+          offset: parsedOffset,
+          pages: Math.ceil(total / parsedLimit)
         }
       }
     });
@@ -166,23 +181,36 @@ router.get("/user/:user_id", async (req, res) => {
 
     const total = countResult[0].total;
 
-    // Get activity logs for the user
-    const [logs] = await pool.execute(
-      `SELECT 
+    // Convert limit and offset to integers and clamp
+    let parsedLimit = Number.parseInt(limit, 10);
+    let parsedOffset = Number.parseInt(offset, 10);
+    if (!Number.isFinite(parsedLimit) || parsedLimit <= 0) parsedLimit = 50;
+    if (!Number.isFinite(parsedOffset) || parsedOffset < 0) parsedOffset = 0;
+    const MAX_LIMIT = 1000;
+    if (parsedLimit > MAX_LIMIT) parsedLimit = MAX_LIMIT;
+
+    // Get activity logs for the user (inject sanitized LIMIT/OFFSET)
+    const userLogsSql = `SELECT 
         al.*,
-        CONCAT(u.first_name, ' ', u.last_name) as user_name,
-        u.position,
-        u.email,
+        COALESCE(CONCAT(u.first_name, ' ', u.last_name), CONCAT(a.first_name, ' ', a.last_name)) as user_name,
+        COALESCE(u.position, a.role) as position,
+        COALESCE(u.email, a.email) as email,
         d.department_name,
-        d.department_acronym
+        d.department_acronym,
+        CASE
+          WHEN u.user_id IS NOT NULL THEN 'user'
+          WHEN a.admin_id IS NOT NULL THEN 'admin'
+          ELSE 'unknown'
+        END as actor_type
        FROM activity_logs al
        LEFT JOIN users u ON al.user_id = u.user_id
+       LEFT JOIN administrators a ON al.user_id = a.admin_id
        LEFT JOIN departments d ON u.department_id = d.department_id
        WHERE al.user_id = ?
        ORDER BY al.created_at DESC
-       LIMIT ? OFFSET ?`,
-      [user_id, parseInt(limit), parseInt(offset)]
-    );
+       LIMIT ${parsedLimit} OFFSET ${parsedOffset}`;
+
+    const [logs] = await pool.execute(userLogsSql, [user_id]);
 
     res.status(200).json({
       success: true,
@@ -192,9 +220,9 @@ router.get("/user/:user_id", async (req, res) => {
         logs,
         pagination: {
           total,
-          limit: parseInt(limit),
-          offset: parseInt(offset),
-          pages: Math.ceil(total / limit)
+          limit: parsedLimit,
+          offset: parsedOffset,
+          pages: Math.ceil(total / parsedLimit)
         }
       }
     });
@@ -217,13 +245,19 @@ router.get("/:activity_log_id", async (req, res) => {
     const [logs] = await pool.execute(
       `SELECT 
         al.*,
-        CONCAT(u.first_name, ' ', u.last_name) as user_name,
-        u.position,
-        u.email,
+        COALESCE(CONCAT(u.first_name, ' ', u.last_name), CONCAT(a.first_name, ' ', a.last_name)) as user_name,
+        COALESCE(u.position, a.role) as position,
+        COALESCE(u.email, a.email) as email,
         d.department_name,
-        d.department_acronym
+        d.department_acronym,
+        CASE
+          WHEN u.user_id IS NOT NULL THEN 'user'
+          WHEN a.admin_id IS NOT NULL THEN 'admin'
+          ELSE 'unknown'
+        END as actor_type
        FROM activity_logs al
        LEFT JOIN users u ON al.user_id = u.user_id
+       LEFT JOIN administrators a ON al.user_id = a.admin_id
        LEFT JOIN departments d ON u.department_id = d.department_id
        WHERE al.activity_log_id = ?`,
       [activity_log_id]
@@ -248,6 +282,109 @@ router.get("/:activity_log_id", async (req, res) => {
       message: "Failed to fetch activity log",
       error: error.message
     });
+  }
+});
+
+// MARK SINGLE ACTIVITY LOG AS READ/UNREAD
+router.post('/:activity_log_id/read', async (req, res) => {
+  try {
+    const { activity_log_id } = req.params;
+    const { admin_id, read = true } = req.body;
+
+    if (read) {
+      if (!admin_id) {
+        return res.status(400).json({ success: false, message: 'admin_id is required when marking as read' });
+      }
+
+      const [result] = await pool.execute(
+        `UPDATE activity_logs SET is_read = 1, read_at = NOW(), read_by_admin_id = ? WHERE activity_log_id = ?`,
+        [admin_id, activity_log_id]
+      );
+
+      return res.status(200).json({ success: true, message: 'Marked as read', affectedRows: result.affectedRows });
+    } else {
+      const [result] = await pool.execute(
+        `UPDATE activity_logs SET is_read = 0, read_at = NULL, read_by_admin_id = NULL WHERE activity_log_id = ?`,
+        [activity_log_id]
+      );
+
+      return res.status(200).json({ success: true, message: 'Marked as unread', affectedRows: result.affectedRows });
+    }
+  } catch (error) {
+    console.error('Error marking activity log read/unread:', error);
+    res.status(500).json({ success: false, message: 'Failed to update read status', error: error.message });
+  }
+});
+
+// MARK MULTIPLE ACTIVITY LOGS AS READ/UNREAD (BATCH)
+router.post('/read', async (req, res) => {
+  try {
+    const { ids, admin_id, read = true } = req.body;
+
+    if (!Array.isArray(ids) || ids.length === 0) {
+      return res.status(400).json({ success: false, message: 'ids (array) is required' });
+    }
+
+    // sanitize and ensure numeric ids
+    const sanitizedIds = ids.map(i => Number.parseInt(i, 10)).filter(Number.isFinite);
+    if (sanitizedIds.length === 0) {
+      return res.status(400).json({ success: false, message: 'No valid ids provided' });
+    }
+
+    const placeholders = sanitizedIds.map(() => '?').join(',');
+
+    if (read) {
+      if (!admin_id) {
+        return res.status(400).json({ success: false, message: 'admin_id is required when marking as read' });
+      }
+
+      const sql = `UPDATE activity_logs SET is_read = 1, read_at = NOW(), read_by_admin_id = ? WHERE activity_log_id IN (${placeholders})`;
+      const params = [admin_id, ...sanitizedIds];
+      const [result] = await pool.execute(sql, params);
+
+      return res.status(200).json({ success: true, message: 'Marked batch as read', affectedRows: result.affectedRows });
+    } else {
+      const sql = `UPDATE activity_logs SET is_read = 0, read_at = NULL, read_by_admin_id = NULL WHERE activity_log_id IN (${placeholders})`;
+      const params = sanitizedIds;
+      const [result] = await pool.execute(sql, params);
+
+      return res.status(200).json({ success: true, message: 'Marked batch as unread', affectedRows: result.affectedRows });
+    }
+  } catch (error) {
+    console.error('Error marking batch read/unread:', error);
+    res.status(500).json({ success: false, message: 'Failed to update read status for batch', error: error.message });
+  }
+});
+
+// GET UNREAD COUNT
+router.get('/unread/count', async (req, res) => {
+  try {
+    const [rows] = await pool.execute(`SELECT COUNT(*) as unread_count FROM activity_logs WHERE is_read = 0`);
+    return res.status(200).json({ success: true, data: { unread_count: rows[0].unread_count } });
+  } catch (error) {
+    console.error('Error fetching unread count:', error);
+    res.status(500).json({ success: false, message: 'Failed to fetch unread count', error: error.message });
+  }
+});
+
+// MARK ALL UNREAD ACTIVITY LOGS AS READ (ADMIN ONLY)
+router.post('/read/all', async (req, res) => {
+  try {
+    const { admin_id } = req.body;
+
+    if (!admin_id) {
+      return res.status(400).json({ success: false, message: 'admin_id is required' });
+    }
+
+    const [result] = await pool.execute(
+      `UPDATE activity_logs SET is_read = 1, read_at = NOW(), read_by_admin_id = ? WHERE is_read = 0`,
+      [admin_id]
+    );
+
+    return res.status(200).json({ success: true, message: 'Marked all unread logs as read', affectedRows: result.affectedRows });
+  } catch (error) {
+    console.error('Error marking all as read:', error);
+    res.status(500).json({ success: false, message: 'Failed to mark all as read', error: error.message });
   }
 });
 
@@ -299,11 +436,12 @@ router.get("/stats/summary", async (req, res) => {
     const [userStats] = await pool.execute(
       `SELECT 
         al.user_id,
-        CONCAT(u.first_name, ' ', u.last_name) as user_name,
-        u.position,
+        COALESCE(CONCAT(u.first_name, ' ', u.last_name), CONCAT(a.first_name, ' ', a.last_name)) as user_name,
+        COALESCE(u.position, a.role) as position,
         COUNT(*) as activity_count
        FROM activity_logs al
        LEFT JOIN users u ON al.user_id = u.user_id
+       LEFT JOIN administrators a ON al.user_id = a.admin_id
        ${dateFilter}
        GROUP BY al.user_id
        ORDER BY activity_count DESC

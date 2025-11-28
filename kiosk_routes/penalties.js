@@ -1,6 +1,7 @@
 const express = require("express");
 const router = express.Router();
 const { pool } = require("../config/database");
+const { logPayment } = require("../helpers/activityLogger");
 
 // WebSocket instance (will be set from server.js)
 let wsServer = null;
@@ -521,7 +522,7 @@ router.get("/summary", async (req, res) => {
 router.put("/:penalty_id/pay", async (req, res) => {
   try {
     const { penalty_id } = req.params;
-    const { payment_method = "manual", notes } = req.body;
+    const { payment_method = "manual", notes, admin_id, admin_name } = req.body;
 
     // GET PENALTY DETAILS BEFORE MARKING AS PAID
     const [penaltyDetails] = await pool.execute(
@@ -596,18 +597,17 @@ router.put("/:penalty_id/pay", async (req, res) => {
         timestamp: new Date().toISOString()
       });
 
-      // SAVE TO ACTIVITY LOG
+      // SAVE TO ACTIVITY LOG WITH ADMIN INFO
       try {
-        await pool.execute(
-          `INSERT INTO activity_logs (user_id, action, details, status, created_at)
-           VALUES (?, ?, ?, ?, NOW())`,
-          [
-            penalty.user_id,
-            'PENALTY_PAID',
-            `Paid penalty of ₱${penalty.fine} for Reference: ${penalty.reference_number} - Payment Method: ${payment_method}${notes ? ' - Notes: ' + notes : ''}`,
-            'completed'
-          ]
-        );
+        await logPayment({
+          user_id: penalty.user_id,
+          action: 'PENALTY_PAID',
+          amount: penalty.fine,
+          reference_number: penalty.reference_number,
+          penalty_id: penalty_id,
+          admin_id: admin_id || null,
+          admin_name: admin_name || null
+        });
       } catch (logError) {
         console.error('Error saving activity log:', logError);
         // Don't fail the request if logging fails
