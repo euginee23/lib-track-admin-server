@@ -4,6 +4,7 @@ const { pool } = require("../config/database");
 const bcrypt = require("bcryptjs");
 const jwt = require("jsonwebtoken");
 const { logAdminAuth } = require("../helpers/activityLogger");
+const { sendAdminPasswordReset, verifyAdminCode } = require("../smtp/adminPasswordReset");
 
 // ADMIN LOGIN ROUTE
 router.post("/login", async (req, res) => {
@@ -220,6 +221,120 @@ router.post("/logout", async (req, res) => {
     });
   } catch (error) {
     console.error("Error during admin logout:", error);
+    res.status(500).json({ message: "Internal server error." });
+  }
+});
+
+// FORGOT PASSWORD ROUTE
+router.post("/forgot-password", async (req, res) => {
+  const { email } = req.body;
+
+  // VALIDATE REQUIRED FIELDS
+  if (!email) {
+    return res.status(400).json({ message: "Email is required." });
+  }
+
+  try {
+    // SEND PASSWORD RESET EMAIL
+    await sendAdminPasswordReset(email);
+
+    // LOG ADMIN FORGOT PASSWORD REQUEST
+    const [adminRows] = await pool.query(
+      `SELECT admin_id, first_name, last_name FROM administrators WHERE email = ? LIMIT 1`,
+      [email]
+    );
+
+    if (adminRows.length > 0) {
+      const admin = adminRows[0];
+      await logAdminAuth({
+        admin_id: admin.admin_id,
+        action: 'ADMIN_PASSWORD_RESET_REQUEST',
+        admin_name: `${admin.first_name} ${admin.last_name}`,
+        email: email,
+        ip_address: req.ip || req.connection.remoteAddress
+      });
+    }
+
+    res.status(200).json({
+      success: true,
+      message: "Password reset code sent to your email address."
+    });
+  } catch (error) {
+    console.error("Error during forgot password:", error);
+    
+    // Don't reveal whether email exists for security reasons
+    if (error.message === "Administrator not found" || 
+        error.message.includes("inactive")) {
+      return res.status(404).json({ message: error.message });
+    }
+    
+    res.status(500).json({ message: "Internal server error." });
+  }
+});
+
+// RESET PASSWORD ROUTE
+router.post("/reset-password", async (req, res) => {
+  const { email, code, newPassword } = req.body;
+
+  // VALIDATE REQUIRED FIELDS
+  if (!email || !code || !newPassword) {
+    return res.status(400).json({ message: "Email, verification code, and new password are required." });
+  }
+
+  // VALIDATE PASSWORD STRENGTH
+  if (newPassword.length < 6) {
+    return res.status(400).json({ message: "Password must be at least 6 characters long." });
+  }
+
+  try {
+    // GET ADMIN ID FROM EMAIL
+    const [adminRows] = await pool.query(
+      `SELECT admin_id, first_name, last_name, status FROM administrators WHERE email = ? LIMIT 1`,
+      [email]
+    );
+
+    if (adminRows.length === 0) {
+      return res.status(404).json({ message: "Administrator not found." });
+    }
+
+    const admin = adminRows[0];
+
+    // CHECK IF ADMIN IS ACTIVE
+    if (admin.status !== 'Active') {
+      return res.status(403).json({ message: "Your account is inactive. Please contact a Super Admin." });
+    }
+
+    // VERIFY RESET CODE
+    const isValidCode = await verifyAdminCode(admin.admin_id, code, "Admin Password Reset");
+    
+    if (!isValidCode) {
+      return res.status(400).json({ message: "Invalid or expired verification code." });
+    }
+
+    // HASH NEW PASSWORD
+    const hashedPassword = await bcrypt.hash(newPassword, 10);
+
+    // UPDATE PASSWORD IN DATABASE
+    await pool.query(
+      `UPDATE administrators SET password_hash = ? WHERE admin_id = ?`,
+      [hashedPassword, admin.admin_id]
+    );
+
+    // LOG ADMIN PASSWORD RESET
+    await logAdminAuth({
+      admin_id: admin.admin_id,
+      action: 'ADMIN_PASSWORD_RESET_SUCCESS',
+      admin_name: `${admin.first_name} ${admin.last_name}`,
+      email: email,
+      ip_address: req.ip || req.connection.remoteAddress
+    });
+
+    res.status(200).json({
+      success: true,
+      message: "Password reset successfully. You can now login with your new password."
+    });
+  } catch (error) {
+    console.error("Error during password reset:", error);
     res.status(500).json({ message: "Internal server error." });
   }
 });
