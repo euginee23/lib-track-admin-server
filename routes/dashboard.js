@@ -24,6 +24,9 @@ router.get('/analytics', async (req, res) => {
     }
 
     // 1. Overdue Books and Fines Analytics (apply period filter)
+    // Count overdue items based on missing return_date so we include transactions
+    // where `status` may be NULL (older inserts didn't set status). This treats
+    // any transaction without a return_date as active and thus eligible to be overdue.
     const [overdueStats] = await pool.execute(`
       SELECT 
         COUNT(DISTINCT t.transaction_id) as overdue_count,
@@ -34,7 +37,7 @@ router.get('/analytics', async (req, res) => {
         END) as total_overdue_days,
         COUNT(DISTINCT t.user_id) as users_with_overdue
       FROM transactions t
-      WHERE t.status = 'Borrowed'
+      WHERE (t.return_date IS NULL)
         AND t.due_date IS NOT NULL
         AND STR_TO_DATE(t.due_date, '%Y-%m-%d') < CURDATE()
         AND (${dateCondition})
@@ -51,6 +54,15 @@ router.get('/analytics', async (req, res) => {
       LEFT JOIN transactions t ON p.transaction_id = t.transaction_id
       WHERE p.status = 'Paid'
         AND (${dateCondition})
+    `);
+
+    // 2b. Pending / Collectable fines (total outstanding across system)
+    const [pendingStats] = await pool.execute(`
+      SELECT
+        COUNT(*) as total_unpaid_penalties,
+        SUM(CASE WHEN p.fine > 0 THEN p.fine ELSE 0 END) as total_unpaid_fines
+      FROM penalties p
+      WHERE (p.status IS NULL OR p.status != 'Paid')
     `);
 
     // 3. User Session Analytics (active users by period)
@@ -99,8 +111,8 @@ router.get('/analytics', async (req, res) => {
         -- choose the best identifier: user.student_id -> user.faculty_id -> user.user_id
         COALESCE(u.student_id, u.faculty_id, u.user_id) AS user_identifier,
         COUNT(t.transaction_id) as borrow_count,
-        COUNT(CASE WHEN t.status = 'Borrowed' THEN 1 END) as currently_borrowed,
-        COUNT(CASE WHEN t.status = 'Returned' THEN 1 END) as returned_count,
+        COUNT(CASE WHEN t.return_date IS NULL THEN 1 END) as currently_borrowed,
+          COUNT(CASE WHEN t.return_date IS NOT NULL THEN 1 END) as returned_count,
         MAX(t.transaction_date) as last_borrow_date
       FROM transactions t
       LEFT JOIN users u ON t.user_id = u.user_id
@@ -148,7 +160,9 @@ router.get('/analytics', async (req, res) => {
         fines: {
           totalCollected: parseFloat(finesStats[0]?.total_fines_collected || 0),
           totalPenalties: finesStats[0]?.total_paid_penalties || 0,
-          averageFine: parseFloat(finesStats[0]?.average_fine || 0)
+          averageFine: parseFloat(finesStats[0]?.average_fine || 0),
+          collectable: parseFloat(pendingStats[0]?.total_unpaid_fines || 0),
+          unpaidPenalties: pendingStats[0]?.total_unpaid_penalties || 0
         },
         userSessions: {
           period,

@@ -62,6 +62,27 @@ const calculateTransactionFine = async (transaction, systemSettings = null) => {
       };
     }
 
+    // If transaction is returned, check if it was overdue at return time
+    if (transaction.status === 'Returned' && transaction.return_date) {
+      const returnDate = new Date(transaction.return_date);
+      const dueDate = new Date(transaction.due_date);
+      
+      // If returned before or on due date, no fine
+      if (returnDate <= dueDate) {
+        return {
+          fine: 0,
+          daysOverdue: 0,
+          status: 'returned_on_time',
+          message: 'Transaction returned on time',
+          transaction_status: 'Returned',
+          return_date: transaction.return_date
+        };
+      }
+      
+      // If returned after due date, calculate fine based on return date
+      // Continue with fine calculation using return_date as calculation date
+    }
+
     // First, check if there's already a paid penalty for this transaction
     const [existingPenalty] = await pool.execute(
       `SELECT * FROM penalties 
@@ -81,8 +102,9 @@ const calculateTransactionFine = async (transaction, systemSettings = null) => {
     }
 
   // Validate transaction date and calculate allowed return period
-  const currentDate = new Date();
-  const currentDateLocalMidnight = new Date(currentDate.getFullYear(), currentDate.getMonth(), currentDate.getDate());
+  // Use return_date if transaction is returned, otherwise use current date
+  const calculationDate = transaction.return_date ? new Date(transaction.return_date) : new Date();
+  const calculationDateLocalMidnight = new Date(calculationDate.getFullYear(), calculationDate.getMonth(), calculationDate.getDate());
   
   // Check if transaction has transaction_date
   if (!transaction.transaction_date) {
@@ -106,9 +128,9 @@ const calculateTransactionFine = async (transaction, systemSettings = null) => {
   const allowedReturnDate = new Date(transactionDateLocalMidnight);
   allowedReturnDate.setDate(allowedReturnDate.getDate() + allowedDays);
 
-  // Calculate days from transaction date to current date
+  // Calculate days from transaction date to calculation date (return_date or current_date)
   const MS_PER_DAY = 1000 * 3600 * 24;
-  const daysSinceTransaction = Math.floor((currentDateLocalMidnight.getTime() - transactionDateLocalMidnight.getTime()) / MS_PER_DAY);
+  const daysSinceTransaction = Math.floor((calculationDateLocalMidnight.getTime() - transactionDateLocalMidnight.getTime()) / MS_PER_DAY);
   
   // Calculate actual overdue days (days beyond the allowed borrowing period)
   const actualOverdueDays = Math.max(0, daysSinceTransaction - allowedDays);

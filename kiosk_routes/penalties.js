@@ -70,6 +70,37 @@ const checkPenaltyExists = async (transactionId, userId) => {
 // - Returns object describing whether a record was created or updated.
 const createOrUpdatePenalty = async (transactionId, userId, fineAmount) => {
   try {
+    // Check if transaction was returned on time (no penalty should exist)
+    const [transactionCheck] = await pool.execute(
+      `SELECT status, return_date, due_date FROM transactions WHERE transaction_id = ?`,
+      [transactionId]
+    );
+
+    if (transactionCheck.length > 0) {
+      const transaction = transactionCheck[0];
+      if (transaction.status === 'Returned' && transaction.return_date && transaction.due_date) {
+        const returnDate = new Date(transaction.return_date);
+        const dueDate = new Date(transaction.due_date);
+        
+        // If returned on time, don't create penalty and clean up any existing unpaid penalty
+        if (returnDate <= dueDate) {
+          await pool.execute(
+            `DELETE FROM penalties 
+             WHERE transaction_id = ? AND user_id = ? AND (status != 'Paid' AND status != 'Waived')`,
+            [transactionId, userId]
+          );
+          
+          return {
+            created: false,
+            updated: false,
+            penalty_id: null,
+            message: "Transaction returned on time, no penalty needed",
+            skipped: true
+          };
+        }
+      }
+    }
+
     // First check if there's ANY penalty (paid or unpaid) for this transaction/user
     const [anyExisting] = await pool.execute(
       `SELECT * FROM penalties 
@@ -191,7 +222,10 @@ router.get("/", async (req, res) => {
         d.department_acronym,
         b.book_title,
         rp.research_title,
-        DATEDIFF(CURDATE(), STR_TO_DATE(t.due_date, '%Y-%m-%d')) as days_overdue,
+        CASE 
+          WHEN t.status = 'Returned' AND t.return_date IS NOT NULL THEN DATEDIFF(STR_TO_DATE(t.return_date, '%Y-%m-%d'), STR_TO_DATE(t.due_date, '%Y-%m-%d'))
+          ELSE DATEDIFF(CURDATE(), STR_TO_DATE(t.due_date, '%Y-%m-%d'))
+        END as days_overdue,
         COALESCE(p.status, CASE WHEN p.fine > 0 THEN 'Pending Payment' ELSE 'Paid' END) as status
       FROM penalties p
       LEFT JOIN transactions t ON p.transaction_id = t.transaction_id
@@ -211,8 +245,12 @@ router.get("/", async (req, res) => {
           GROUP BY p2.transaction_id, p2.user_id
         ))
       )
-      -- Only show penalties for unreturned transactions OR already paid/waived penalties
-      AND (t.status != 'Returned' OR p.status IN ('Paid', 'Waived'))
+      -- Only show penalties for unreturned transactions OR already paid/waived penalties OR returned transactions that were actually overdue
+      AND (
+        t.status != 'Returned' 
+        OR p.status IN ('Paid', 'Waived')
+        OR (t.status = 'Returned' AND t.return_date IS NOT NULL AND STR_TO_DATE(t.due_date, '%Y-%m-%d') < STR_TO_DATE(t.return_date, '%Y-%m-%d'))
+      )
       AND ${whereClause.replace('WHERE 1=1', '1=1')}
       ORDER BY p.updated_at DESC`,
       params
@@ -399,7 +437,10 @@ router.get("/user/:user_id", async (req, res) => {
           d.department_acronym,
           b.book_title,
           rp.research_title,
-          DATEDIFF(CURDATE(), STR_TO_DATE(t.due_date, '%Y-%m-%d')) as days_overdue,
+          CASE 
+            WHEN t.status = 'Returned' AND t.return_date IS NOT NULL THEN DATEDIFF(STR_TO_DATE(t.return_date, '%Y-%m-%d'), STR_TO_DATE(t.due_date, '%Y-%m-%d'))
+            ELSE DATEDIFF(CURDATE(), STR_TO_DATE(t.due_date, '%Y-%m-%d'))
+          END as days_overdue,
           COALESCE(p.status, CASE WHEN p.fine > 0 THEN 'Pending Payment' ELSE 'Paid' END) as status
         FROM penalties p
         LEFT JOIN transactions t ON p.transaction_id = t.transaction_id
@@ -481,7 +522,13 @@ router.get("/summary", async (req, res) => {
        FROM penalties p
        LEFT JOIN transactions t ON p.transaction_id = t.transaction_id
        WHERE (p.status != 'Paid' OR p.status IS NULL)
-         AND STR_TO_DATE(t.due_date, '%Y-%m-%d') < CURDATE()
+         AND (
+           -- For returned transactions, only count if they were actually overdue at return time (positive days)
+           (t.status = 'Returned' AND t.return_date IS NOT NULL AND STR_TO_DATE(t.due_date, '%Y-%m-%d') < STR_TO_DATE(t.return_date, '%Y-%m-%d'))
+           OR
+           -- For active transactions, check if they are currently overdue  
+           (t.status != 'Returned' AND STR_TO_DATE(t.due_date, '%Y-%m-%d') < CURDATE())
+         )
          AND p.penalty_id IN (
            SELECT MAX(p2.penalty_id) 
            FROM penalties p2 
@@ -497,11 +544,21 @@ router.get("/summary", async (req, res) => {
        WHERE updated_at >= DATE_SUB(NOW(), INTERVAL 7 DAY)`
     );
 
+    // Get totals for paid penalties so UI can show collected amounts
+    const [paidResult] = await pool.execute(
+      `SELECT COUNT(*) as paid_count, SUM(fine) as paid_fines
+       FROM penalties
+       WHERE status = 'Paid'`
+    );
+
     res.status(200).json({
       success: true,
       data: {
         total_penalties: totalResult[0].total_penalties || 0,
+        // total_fines represents collectable/unpaid fines (latest unpaid per tx/user)
         total_fines: totalResult[0].total_fines || 0,
+        total_paid_fines: paidResult[0].paid_fines || 0,
+        total_paid_count: paidResult[0].paid_count || 0,
         overdue_count: overdueResult[0].overdue_count || 0,
         overdue_fines: overdueResult[0].overdue_fines || 0,
         recent_count: recentResult[0].recent_count || 0,
@@ -985,7 +1042,20 @@ router.post("/mark-as-lost", async (req, res) => {
 // CLEANUP OLD PENALTY RECORDS - Keep only the latest unpaid penalty per transaction/user, preserve all paid penalties
 router.post("/cleanup", async (req, res) => {
   try {
-    const [result] = await pool.execute(
+    // First, delete penalties for transactions that were returned on time (should not have any penalty)
+    const [onTimeResult] = await pool.execute(
+      `DELETE p FROM penalties p
+       INNER JOIN transactions t ON p.transaction_id = t.transaction_id
+       WHERE t.status = 'Returned' 
+         AND t.return_date IS NOT NULL 
+         AND t.due_date IS NOT NULL
+         AND STR_TO_DATE(t.return_date, '%Y-%m-%d') <= STR_TO_DATE(t.due_date, '%Y-%m-%d')
+         AND p.status != 'Paid'
+         AND p.status != 'Waived'`
+    );
+
+    // Then, cleanup duplicate penalty records (keep latest unpaid per transaction/user)
+    const [duplicateResult] = await pool.execute(
       `DELETE p1 FROM penalties p1
        INNER JOIN penalties p2 
        WHERE p1.transaction_id = p2.transaction_id 
@@ -999,7 +1069,9 @@ router.post("/cleanup", async (req, res) => {
       success: true,
       message: "Penalty cleanup completed (preserved all paid penalties)",
       data: {
-        records_deleted: result.affectedRows
+        on_time_returns_cleaned: onTimeResult.affectedRows,
+        duplicate_records_deleted: duplicateResult.affectedRows,
+        total_cleaned: onTimeResult.affectedRows + duplicateResult.affectedRows
       }
     });
 
