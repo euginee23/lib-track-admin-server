@@ -172,7 +172,7 @@ async function logReservation({
  * @param {number} params.amount - Payment amount
  * @param {string} params.reference_number - Payment reference number
  * @param {number} params.penalty_id - Penalty ID (optional)
- * @param {number} params.admin_id - Admin ID who processed the payment (required for tracking)
+ * @param {number} params.admin_id - Admin ID who processed the payment (optional)
  * @param {string} params.admin_name - Admin name (optional)
  * @returns {Promise<Object>} Result
  */
@@ -182,27 +182,29 @@ async function logPayment({
   amount,
   reference_number,
   penalty_id = null,
-  admin_id,
+  admin_id = null,
   admin_name = null
 }) {
   try {
-    if (!user_id || !action || !amount || !reference_number || !admin_id) {
-      throw new Error('user_id, action, amount, reference_number, and admin_id are required');
+    // Require core fields but allow admin info to be optional (payments may be made via kiosk/no-admin flow)
+    if (!user_id || !action || amount === undefined || amount === null || !reference_number) {
+      throw new Error('user_id, action, amount, and reference_number are required');
     }
 
     let details = `Payment of ₱${parseFloat(amount).toFixed(2)} - Reference: ${reference_number}`;
-    
+
     if (penalty_id) {
       details += ` | Penalty ID: ${penalty_id}`;
     }
 
+    // Only append admin info if provided
     return await logActivity({
       user_id,
       action,
       details,
       status: 'completed',
-      admin_id,
-      admin_name
+      admin_id: admin_id || null,
+      admin_name: admin_name || null
     });
   } catch (error) {
     console.error('Error logging payment:', error);

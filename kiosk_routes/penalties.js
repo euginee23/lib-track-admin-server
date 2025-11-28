@@ -636,7 +636,7 @@ router.put("/:penalty_id/pay", async (req, res) => {
       });
     }
 
-    // BROADCAST WEBSOCKET EVENT FOR PENALTY PAYMENT
+    // BROADCAST WEBSOCKET EVENT FOR PENALTY PAYMENT (if WS available)
     if (wsServer) {
       wsServer.broadcast({
         type: 'PENALTY_PAID',
@@ -653,22 +653,22 @@ router.put("/:penalty_id/pay", async (req, res) => {
         },
         timestamp: new Date().toISOString()
       });
+    }
 
-      // SAVE TO ACTIVITY LOG WITH ADMIN INFO
-      try {
-        await logPayment({
-          user_id: penalty.user_id,
-          action: 'PENALTY_PAID',
-          amount: penalty.fine,
-          reference_number: penalty.reference_number,
-          penalty_id: penalty_id,
-          admin_id: admin_id || null,
-          admin_name: admin_name || null
-        });
-      } catch (logError) {
-        console.error('Error saving activity log:', logError);
-        // Don't fail the request if logging fails
-      }
+    // SAVE TO ACTIVITY LOG WITH ADMIN INFO (always attempt to log)
+    try {
+      await logPayment({
+        user_id: penalty.user_id,
+        action: 'PENALTY_PAID',
+        amount: penalty.fine,
+        reference_number: penalty.reference_number,
+        penalty_id: penalty_id,
+        admin_id: admin_id || null,
+        admin_name: admin_name || null
+      });
+    } catch (logError) {
+      console.error('Error saving activity log:', logError);
+      // Don't fail the request if logging fails
     }
 
     res.status(200).json({
