@@ -64,6 +64,8 @@ app.use('/api/qr', require('./routes/qrScan'));
 
 // SETTINGS ROUTE
 app.use('/api/settings', require('./routes/settings'));
+// FAQS ROUTE
+app.use('/api/faqs', require('./routes/faqs'));
 
 // SEMESTERS ROUTE
 app.use('/api/semesters', require('./routes/semesters'));
