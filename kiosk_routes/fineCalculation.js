@@ -89,19 +89,26 @@ const calculateTransactionFine = async (transaction, systemSettings = null) => {
   const MS_PER_DAY = 1000 * 3600 * 24;
   const daysDifference = Math.floor((currentDateLocalMidnight.getTime() - dueDateLocalMidnight.getTime()) / MS_PER_DAY);
 
-    if (daysDifference <= 0) {
+    // Determine user type and get allowed borrow days
+    const isStudent = !transaction.position || transaction.position === 'Student';
+    const allowedDays = isStudent ? systemSettings.student_borrow_days : systemSettings.faculty_borrow_days;
+    const dailyFine = isStudent ? systemSettings.student_daily_fine : systemSettings.faculty_daily_fine;
+
+    // Calculate actual overdue days (days beyond the allowed borrowing period)
+    const actualOverdueDays = Math.max(0, daysDifference - allowedDays);
+
+    if (actualOverdueDays <= 0) {
       return {
         fine: 0,
         daysOverdue: 0,
         status: 'on_time',
-        message: 'Item not overdue'
+        message: daysDifference <= 0 ? 'Item not yet due' : `Item within allowed ${allowedDays}-day period`,
+        allowedDays: allowedDays,
+        daysPastDue: Math.max(0, daysDifference)
       };
     }
-
-    const isStudent = !transaction.position || transaction.position === 'Student';
-    const dailyFine = isStudent ? systemSettings.student_daily_fine : systemSettings.faculty_daily_fine;
     
-    const totalFine = daysDifference * dailyFine;
+    const totalFine = actualOverdueDays * dailyFine;
 
     // Store penalty in database (only if no paid penalty exists)
     try {
@@ -113,11 +120,14 @@ const calculateTransactionFine = async (transaction, systemSettings = null) => {
 
     return {
       fine: totalFine,
-      daysOverdue: daysDifference,
+      daysOverdue: actualOverdueDays,
       dailyFine: dailyFine,
       userType: isStudent ? 'student' : 'faculty',
       status: 'overdue',
-      message: `${daysDifference} day${daysDifference > 1 ? 's' : ''} overdue at ₱${dailyFine}/day`
+      message: `${actualOverdueDays} day${actualOverdueDays > 1 ? 's' : ''} overdue at ₱${dailyFine}/day (${allowedDays} days allowed)`,
+      allowedDays: allowedDays,
+      daysPastDue: daysDifference,
+      totalDaysFromDue: daysDifference
     };
 
   } catch (error) {
@@ -296,8 +306,17 @@ router.get("/overdue", async (req, res) => {
     // Get system settings
     const systemSettings = await getSystemSettings();
 
-    // Build query conditions
-    let whereClause = "WHERE t.transaction_type = 'borrow' AND t.due_date IS NOT NULL AND STR_TO_DATE(t.due_date, '%Y-%m-%d') < CURDATE()";
+    // Build query conditions - only get transactions that are beyond the allowed borrowing period
+    // For students: due_date + student_borrow_days < current_date
+    // For faculty: due_date + faculty_borrow_days < current_date
+    let whereClause = `WHERE t.transaction_type = 'borrow' AND t.due_date IS NOT NULL AND (
+      (CASE 
+        WHEN (u.position IS NULL OR u.position = 'Student') THEN 
+          DATE_ADD(STR_TO_DATE(t.due_date, '%Y-%m-%d'), INTERVAL ${systemSettings.student_borrow_days} DAY) < CURDATE()
+        ELSE 
+          DATE_ADD(STR_TO_DATE(t.due_date, '%Y-%m-%d'), INTERVAL ${systemSettings.faculty_borrow_days} DAY) < CURDATE()
+      END)
+    )`;
     let queryParams = [];
 
     if (department_id) {
