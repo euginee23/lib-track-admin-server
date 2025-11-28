@@ -176,14 +176,17 @@ router.get("/", async (req, res) => {
     }
 
     // Main query - return latest unpaid penalty per transaction/user + all paid penalties
+    // Exclude penalties for transactions that have been returned (t.status = 'Returned')
     const [penalties] = await pool.execute(
       `SELECT 
         p.*,
         t.reference_number,
         t.due_date,
         t.transaction_type,
+        t.status as transaction_status,
         CONCAT(u.first_name, ' ', u.last_name) as user_name,
         u.position,
+        u.email,
         d.department_acronym,
         b.book_title,
         rp.research_title,
@@ -196,17 +199,19 @@ router.get("/", async (req, res) => {
       LEFT JOIN books b ON t.book_id = b.book_id
       LEFT JOIN research_papers rp ON t.research_paper_id = rp.research_paper_id
       WHERE (
-        -- Get all paid penalties (status = 'Paid')
-        p.status = 'Paid'
+        -- Get all paid/waived penalties (status = 'Paid' or 'Waived')
+        (p.status = 'Paid' OR p.status = 'Waived')
         OR 
-        -- Get only the latest unpaid penalty per transaction/user (status != 'Paid' or NULL)
-        ((p.status != 'Paid' OR p.status IS NULL) AND p.penalty_id IN (
+        -- Get only the latest unpaid penalty per transaction/user (status != 'Paid' and != 'Waived')
+        ((p.status != 'Paid' AND p.status != 'Waived' OR p.status IS NULL) AND p.penalty_id IN (
           SELECT MAX(p2.penalty_id) 
           FROM penalties p2 
-          WHERE (p2.status != 'Paid' OR p2.status IS NULL)
+          WHERE (p2.status != 'Paid' AND p2.status != 'Waived' OR p2.status IS NULL)
           GROUP BY p2.transaction_id, p2.user_id
         ))
       )
+      -- Only show penalties for unreturned transactions OR already paid/waived penalties
+      AND (t.status != 'Returned' OR p.status IN ('Paid', 'Waived'))
       AND ${whereClause.replace('WHERE 1=1', '1=1')}
       ORDER BY p.updated_at DESC`,
       params
@@ -253,7 +258,124 @@ router.get("/", async (req, res) => {
   }
 });
 
-// GET PENALTIES FOR A SPECIFIC USER
+// WAIVE PENALTY - Mark penalty as waived with reason
+router.put("/:penalty_id/waive", async (req, res) => {
+  try {
+    const { penalty_id } = req.params;
+    const { waive_reason, waived_by } = req.body;
+
+    if (!waive_reason) {
+      return res.status(400).json({
+        success: false,
+        message: "Waive reason is required"
+      });
+    }
+
+    // GET PENALTY DETAILS BEFORE WAIVING
+    const [penaltyDetails] = await pool.execute(
+      `SELECT 
+        p.*,
+        t.reference_number,
+        CONCAT(u.first_name, ' ', u.last_name) as user_name,
+        u.email,
+        b.book_title,
+        rp.research_title
+       FROM penalties p
+       LEFT JOIN transactions t ON p.transaction_id = t.transaction_id
+       LEFT JOIN users u ON p.user_id = u.user_id
+       LEFT JOIN books b ON t.book_id = b.book_id
+       LEFT JOIN research_papers rp ON t.research_paper_id = rp.research_paper_id
+       WHERE p.penalty_id = ?`,
+      [penalty_id]
+    );
+
+    if (penaltyDetails.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: "Penalty not found"
+      });
+    }
+
+    const penalty = penaltyDetails[0];
+
+    // Check if already paid or waived
+    if (penalty.status === 'Paid' || penalty.status === 'Waived') {
+      return res.status(400).json({
+        success: false,
+        message: `Penalty already ${penalty.status.toLowerCase()}`
+      });
+    }
+
+    // Mark penalty as waived
+    const [result] = await pool.execute(
+      `UPDATE penalties 
+       SET status = 'Waived', waive_reason = ?, waived_by = ?, updated_at = NOW()
+       WHERE penalty_id = ?`,
+      [waive_reason, waived_by || 'Admin', penalty_id]
+    );
+
+    if (result.affectedRows === 0) {
+      return res.status(404).json({
+        success: false,
+        message: "Failed to waive penalty"
+      });
+    }
+
+    // SEND USER NOTIFICATION VIA WEBSOCKET
+    if (wsServer && wsServer.io) {
+      wsServer.io.emit('user_notification', {
+        user_id: penalty.user_id,
+        type: 'penalty_waived',
+        title: 'Penalty Waived',
+        message: `Your penalty of ₱${penalty.fine.toFixed(2)} for ${penalty.book_title || penalty.research_title || 'item'} (Ref: ${penalty.reference_number}) has been waived. Reason: ${waive_reason}`,
+        fine_amount: penalty.fine,
+        waive_reason: waive_reason,
+        reference_number: penalty.reference_number,
+        timestamp: new Date().toISOString(),
+        priority: 'high'
+      });
+    }
+
+    // SAVE TO ACTIVITY LOG
+    try {
+      await pool.execute(
+        `INSERT INTO activity_logs (user_id, action, details, status, created_at)
+         VALUES (?, ?, ?, ?, NOW())`,
+        [
+          penalty.user_id,
+          'PENALTY_WAIVED',
+          `Waived penalty of ₱${penalty.fine} for Reference: ${penalty.reference_number} - Reason: ${waive_reason} - Waived by: ${waived_by || 'Admin'}`,
+          'completed'
+        ]
+      );
+    } catch (logError) {
+      console.error('Error saving activity log:', logError);
+    }
+
+    res.status(200).json({
+      success: true,
+      message: "Penalty waived successfully",
+      data: {
+        penalty_id,
+        user_id: penalty.user_id,
+        user_name: penalty.user_name,
+        fine_amount: penalty.fine,
+        waive_reason,
+        waived_by: waived_by || 'Admin'
+      }
+    });
+
+  } catch (error) {
+    console.error("Error waiving penalty:", error);
+    res.status(500).json({
+      success: false,
+      message: "Failed to waive penalty",
+      error: error.message
+    });
+  }
+});
+
+// GET PENALTIES FOR SPECIFIC USER
 router.get("/user/:user_id", async (req, res) => {
   try {
     const { user_id } = req.params;
@@ -439,6 +561,20 @@ router.put("/:penalty_id/pay", async (req, res) => {
       return res.status(404).json({
         success: false,
         message: "Penalty not found",
+      });
+    }
+
+    // SEND USER NOTIFICATION VIA WEBSOCKET
+    if (wsServer && wsServer.io) {
+      wsServer.io.emit('user_notification', {
+        user_id: penalty.user_id,
+        type: 'penalty_paid',
+        title: 'Penalty Payment Received',
+        message: `Your penalty of ₱${penalty.fine.toFixed(2)} for ${penalty.book_title || penalty.research_title || 'item'} (Ref: ${penalty.reference_number}) has been marked as paid. Thank you!`,
+        fine_amount: penalty.fine,
+        reference_number: penalty.reference_number,
+        timestamp: new Date().toISOString(),
+        priority: 'medium'
       });
     }
 
