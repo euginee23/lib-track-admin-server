@@ -119,6 +119,10 @@ app.use('/api/users', require('./user_routes/profile'));
 // NOTIFICATIONS ROUTE
 app.use('/api/notifications', require('./user_routes/notifications'));
 
+// BOT ROUTES (single entrypoint)
+const botRoutes = require('./bot_routes/botRouteMain');
+app.use('/api/bot', botRoutes);
+
 // ADMIN MANAGEMENT ROUTE
 app.use('/api/admins', require('./routes/manageAdmins'));
 
@@ -221,6 +225,10 @@ console.log("✅ WebSocket server started and ready for connections");
 borrowBookRoute.setWebSocketServer(wsServer);
 returnBookRoute.setWebSocketServer(wsServer);
 penaltiesRoute.setWebSocketServer(wsServer);
+// Inject WebSocket server into bot routes if supported
+if (botRoutes && typeof botRoutes.setWebSocketServer === 'function') {
+  botRoutes.setWebSocketServer(wsServer);
+}
 
 wsServer.broadcast({ 
   type: 'SERVER_STARTED',
