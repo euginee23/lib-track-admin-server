@@ -10,6 +10,7 @@ require("dotenv").config();
 // DATABASE CONFIGURATION
 const { testConnection, pool } = require("./config/database");
 const WebSocketServer = require("./websocket/websocket");
+const ollamaService = require("./services/ollamaService");
 
 const app = express();
 const PORT = process.env.PORT || 4000;
@@ -122,6 +123,9 @@ app.use('/api/notifications', require('./user_routes/notifications'));
 // BOT ROUTES (single entrypoint)
 const botRoutes = require('./bot_routes/botRouteMain');
 app.use('/api/bot', botRoutes);
+
+// CHATBOT ROUTES (AI-powered with Ollama)
+app.use('/api/chatbot', require('./routes/chatbot'));
 
 // ADMIN MANAGEMENT ROUTE
 app.use('/api/admins', require('./routes/manageAdmins'));
@@ -246,6 +250,17 @@ const startServer = async () => {
 
     // TEST DB CONNECTION
     await testConnection();
+
+    // INITIALIZE OLLAMA SERVICE
+    console.log('🤖 Initializing Ollama AI Service...');
+    const ollamaReady = await ollamaService.initialize();
+    if (ollamaReady) {
+      console.log('✅ Ollama AI Service ready');
+    } else {
+      console.warn('⚠️  Ollama service not available. Chatbot features will be limited.');
+      console.warn('   To enable AI chatbot: Install and run Ollama (https://ollama.ai)');
+      console.warn('   Then run: ollama pull llama3.2');
+    }
   } catch (error) {
     console.error("❌ Failed to start server:", error.message);
     process.exit(1);
