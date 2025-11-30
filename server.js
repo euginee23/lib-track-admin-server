@@ -15,37 +15,6 @@ const ollamaService = require("./services/ollamaService");
 const app = express();
 const PORT = process.env.PORT || 4000;
 
-// Optional Ollama proxy: expose Ollama through this server under `/api/ollama`
-// Useful when you want a single HTTPS origin and avoid CORS or to expose
-// Ollama over TLS via the same host.
-const { createProxyMiddleware } = require('http-proxy-middleware');
-const OLLAMA_TARGET = (process.env.OLLAMA_HOST || 'http://localhost:11434').replace(/\/$/, '');
-const OLLAMA_PROXY_SECURE = process.env.OLLAMA_PROXY_SECURE !== 'false';
-
-// Mount proxy before routes so requests to /api/ollama/* are forwarded
-app.use('/api/ollama', createProxyMiddleware({
-  target: OLLAMA_TARGET,
-  changeOrigin: true,
-  secure: OLLAMA_PROXY_SECURE,
-  ws: true,
-  logLevel: 'warn',
-  proxyTimeout: 0,
-  timeout: 0,
-  pathRewrite: {
-    '^/api/ollama': '/',
-  },
-  onProxyReq: (proxyReq, req, res) => {
-    // Forward client IP
-    try { proxyReq.setHeader('X-Forwarded-For', req.ip || req.connection.remoteAddress); } catch (e) {}
-  },
-  onError: (err, req, res) => {
-    console.error('Ollama proxy error:', err && err.message ? err.message : err);
-    if (!res.headersSent) {
-      res.status(502).json({ message: 'Ollama proxy error' });
-    }
-  }
-}));
-
 // MIDDLEWARE
 app.use(helmet());
 app.use(cors({
