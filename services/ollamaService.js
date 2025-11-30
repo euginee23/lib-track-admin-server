@@ -11,7 +11,7 @@ class OllamaService {
     this.ollama = new Ollama({ 
       host: process.env.OLLAMA_HOST || 'http://localhost:11434' 
     });
-    this.defaultModel = process.env.OLLAMA_MODEL || 'llama3.2:1b';
+    this.defaultModel = process.env.OLLAMA_MODEL || 'llama3.2:3b';
     this.available = false; // indicates whether Ollama is reachable
     this.conversationHistory = new Map();
   }
