@@ -94,20 +94,27 @@ class OllamaService {
    * @param {Array} tools - Available tools for function calling
    * @param {Object} context - Additional context (user info, etc.)
    */
-  async chat(message, sessionId, tools = [], context = {}) {
+  async chat(message, sessionId, tools = [], context = {}, options = {}) {
     try {
+      const saveHistory = options.saveHistory !== false;
+      const maxHistory = options.maxHistory || 20;
+
       // Get or initialize conversation history
       if (!this.conversationHistory.has(sessionId)) {
         this.conversationHistory.set(sessionId, []);
       }
-      
-      const history = this.conversationHistory.get(sessionId);
-      
-      // Add user message to history
-      history.push({
-        role: 'user',
-        content: message
-      });
+
+      const storedHistory = this.conversationHistory.get(sessionId) || [];
+      // Build messages array from stored history. Do NOT mutate storedHistory unless saveHistory is true.
+      const messagesFromHistory = Array.isArray(storedHistory) ? [...storedHistory] : [];
+
+      // If saving history, append the user message to storedHistory as well
+      if (saveHistory) {
+        storedHistory.push({ role: 'user', content: message });
+      }
+
+      // Messages to send include system prompt + stored history (copied) + current user message
+      const history = [...messagesFromHistory, { role: 'user', content: message }];
 
       // Build system prompt with context
       const systemPrompt = this.buildSystemPrompt(context);
@@ -142,15 +149,14 @@ class OllamaService {
         assistantContent = response.message.content;
       }
 
-      history.push({
-        role: 'assistant',
-        content: assistantContent,
-        tool_calls: response.message.tool_calls
-      });
-
-      // Limit history to last 20 messages to prevent context overflow
-      if (history.length > 20) {
-        this.conversationHistory.set(sessionId, history.slice(-20));
+      if (saveHistory) {
+        storedHistory.push({ role: 'assistant', content: assistantContent, tool_calls: response.message.tool_calls });
+        // Limit history to last `maxHistory` messages to prevent context overflow
+        if (storedHistory.length > maxHistory) {
+          this.conversationHistory.set(sessionId, storedHistory.slice(-maxHistory));
+        } else {
+          this.conversationHistory.set(sessionId, storedHistory);
+        }
       }
 
       return {
@@ -173,24 +179,16 @@ class OllamaService {
   async continueWithToolResults(sessionId, toolResults, tools = []) {
     try {
       const history = this.conversationHistory.get(sessionId) || [];
-      
       // Add tool results to history
       toolResults.forEach(result => {
-        history.push({
-          role: 'tool',
-          content: JSON.stringify(result.result),
-          name: result.name
-        });
+        history.push({ role: 'tool', content: JSON.stringify(result.result), name: result.name });
       });
 
       // Build system prompt
       const systemPrompt = this.buildSystemPrompt({});
 
       // Prepare messages
-      const messages = [
-        { role: 'system', content: systemPrompt },
-        ...history
-      ];
+      const messages = [{ role: 'system', content: systemPrompt }, ...history];
 
       // Continue conversation with tool results
       const response = await this.ollama.chat({
@@ -201,17 +199,11 @@ class OllamaService {
       });
 
       // Add assistant response to history
-      history.push({
-        role: 'assistant',
-        content: response.message.content,
-        tool_calls: response.message.tool_calls
-      });
+      history.push({ role: 'assistant', content: response.message.content, tool_calls: response.message.tool_calls });
+      // Trim stored history to avoid unbounded growth (keep last 20 by default)
+      if (history.length > 20) this.conversationHistory.set(sessionId, history.slice(-20));
 
-      return {
-        message: response.message.content,
-        toolCalls: response.message.tool_calls || [],
-        done: response.done
-      };
+      return { message: response.message.content, toolCalls: response.message.tool_calls || [], done: response.done };
     } catch (error) {
       console.error('Error continuing with tool results:', error);
       throw new Error('Failed to process tool results');
@@ -383,14 +375,14 @@ Current time (UTC): ${new Date().toISOString()}`;
   /**
    * Stream chat responses (for real-time streaming to frontend)
    */
-  async *chatStream(message, sessionId, tools = [], context = {}) {
+  async *chatStream(message, sessionId, tools = [], context = {}, options = {}) {
     try {
+      const saveHistory = options.saveHistory !== false;
       if (!this.conversationHistory.has(sessionId)) {
         this.conversationHistory.set(sessionId, []);
       }
-      
-      const history = this.conversationHistory.get(sessionId);
-      history.push({ role: 'user', content: message });
+      const history = this.conversationHistory.get(sessionId) || [];
+      if (saveHistory) history.push({ role: 'user', content: message });
 
       const systemPrompt = this.buildSystemPrompt(context);
       const messages = [
@@ -432,11 +424,10 @@ Current time (UTC): ${new Date().toISOString()}`;
         finalContent = fullContent;
       }
 
-      history.push({
-        role: 'assistant',
-        content: finalContent,
-        tool_calls: toolCalls
-      });
+      if (saveHistory) {
+        history.push({ role: 'assistant', content: finalContent, tool_calls: toolCalls });
+        if (history.length > 20) this.conversationHistory.set(sessionId, history.slice(-20));
+      }
 
       yield { type: 'done', toolCalls };
     } catch (error) {

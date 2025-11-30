@@ -11,6 +11,24 @@ class AIRouter {
     this.maxToolIterations = 5; // Prevent infinite loops
   }
 
+  // Heuristic: decide whether message is simple and should use model-only fast path
+  isSimpleMessage(message = '') {
+    if (!message || typeof message !== 'string') return false;
+    // Too short or clearly conversational (not a data/task request)
+    if (message.length < 80) return true;
+    // If message doesn't include any trigger words for tools, consider simple
+    const heavyTriggers = ['search', 'find', 'where', 'availability', 'recommend', 'reserve', 'borrow', 'return', 'paper', 'research', 'isbn', 'transaction', 'my', 'due', 'overdue', 'fine'];
+    const m = message.toLowerCase();
+    for (const t of heavyTriggers) if (m.includes(t)) return false;
+    return true;
+  }
+
+  truncateMessage(text = '', max = 1200) {
+    if (!text || typeof text !== 'string') return text;
+    if (text.length <= max) return text;
+    return text.slice(0, max - 3) + '...';
+  }
+
   /**
    * Heuristic to decide whether to expose tools for a message
    * Returns true when the message appears to require real-time or user-specific data
@@ -85,6 +103,7 @@ class AIRouter {
           const papersRes = await executeTool('search_research_papers', { query: queryToUse, limit: 20 });
           if (papersRes && papersRes.success && Array.isArray(papersRes.papers) && papersRes.papers.length > 0) {
             const formatted = this.formatToolResults([{ name: 'search_research_papers', result: papersRes }], '');
+            try { this.clearHistory(sessionId); } catch (e) { /* ignore */ }
             return {
               success: true,
               message: formatted || `🔎 I found the following research papers for "${queryToUse}".`,
@@ -94,6 +113,7 @@ class AIRouter {
           }
 
           // Deterministic no-results message: avoid model-led corrections or suggestions that change the name.
+          try { this.clearHistory(sessionId); } catch (e) { /* ignore */ }
           return {
             success: true,
             message: `🔎 I searched the WMSU catalog for exact matches for "${queryToUse}" but found no results. Would you like me to try alternate spellings or search broader keywords?`,
@@ -112,10 +132,36 @@ class AIRouter {
 
       // Decide whether to expose tools based on heuristics
       const exposeTools = this.needsTools(message, context);
+      const simple = this.isSimpleMessage(message);
       if (exposeTools) console.log('🔧 Exposing tools for this request');
+      else if (simple) console.log('🔍 Simple message - fast path (no tools)');
       else console.log('🔍 Handling with model knowledge (no tools)');
 
-      // Initial chat
+      // Fast-path for simple messages: avoid heavy tool flows and memory usage
+      if (!exposeTools && simple) {
+        try {
+          currentResponse = await ollamaService.chat(message, sessionId, [], context, { saveHistory: false });
+
+          // Truncate lengthy outputs for simple, non-tool responses to avoid oversharing
+          const maxLen = 1000;
+          let out = currentResponse && currentResponse.message ? String(currentResponse.message) : '';
+          out = this.truncateMessage(out, maxLen);
+
+          // Clear conversation history to manage memory for ephemeral/simple chats
+          try { this.clearHistory(sessionId); } catch (e) { /* ignore */ }
+
+          return {
+            success: true,
+            message: out,
+            toolCallsExecuted: 0,
+            iterations: 0
+          };
+        } catch (e) {
+          console.warn('Fast-path chat failed, falling back to normal flow:', e && e.message);
+        }
+      }
+
+      // Initial chat (normal flow)
       currentResponse = await ollamaService.chat(
         message,
         sessionId,
@@ -185,6 +231,7 @@ class AIRouter {
 
             const formattedFallback = this.formatToolResults(allToolResults, '');
             if (formattedFallback) {
+              try { this.clearHistory(sessionId); } catch (e) { /* ignore */ }
               return {
                 success: true,
                 message: formattedFallback,
@@ -204,6 +251,8 @@ class AIRouter {
 
           const formatted = this.formatToolResults(allToolResults, '');
           if (formatted) {
+            // Clear memory for this session — task completed
+            try { this.clearHistory(sessionId); } catch (e) { /* ignore */ }
             return {
               success: true,
               message: formatted,
@@ -214,6 +263,7 @@ class AIRouter {
         }
 
         // If no tools were executed or formatting produced nothing, return the model message
+        try { this.clearHistory(sessionId); } catch (e) { /* ignore */ }
         return {
           success: true,
           message: currentResponse.message,
@@ -222,6 +272,7 @@ class AIRouter {
         };
     } catch (error) {
       console.error('Error in AI Router:', error);
+      try { this.clearHistory(sessionId); } catch (e) { /* ignore */ }
       return {
         success: false,
         error: error.message,
@@ -425,6 +476,28 @@ class AIRouter {
       const exposeToolsStream = this.needsTools(message, context);
       if (exposeToolsStream) onChunk({ type: 'info', info: 'Exposing tools for this stream' });
 
+      // Fast-path streaming: if the message is simple and does not require tools,
+      // avoid using the streaming API which can emit many small chunks and
+      // cause UI flicker. Instead, call the non-streaming chat and send one
+      // single response chunk.
+      const simpleStream = this.isSimpleMessage(message);
+      if (!exposeToolsStream && simpleStream) {
+        try {
+          onChunk({ type: 'thinking', thinking: true });
+          const resp = await ollamaService.chat(message, sessionId, [], context, { saveHistory: false });
+          const out = this.truncateMessage(resp && resp.message ? String(resp.message) : '', 1000);
+          onChunk({ type: 'content', content: out });
+          onChunk({ type: 'thinking', thinking: false });
+          // clear history for simple chats
+          try { this.clearHistory(sessionId); } catch (e) { /* ignore */ }
+          onChunk({ type: 'complete', toolCallsExecuted: 0 });
+          return;
+        } catch (e) {
+          console.warn('Fast-path stream fallback failed:', e && e.message);
+          // fall through to normal streaming behavior
+        }
+      }
+
       // Start streaming
       const stream = ollamaService.chatStream(
         message,
@@ -557,6 +630,8 @@ class AIRouter {
       // Ensure any buffered content is flushed and the thinking indicator cleared
       flushContent();
       if (thinkingSent) onChunk({ type: 'thinking', thinking: false });
+      // Clear memory after finishing streaming task
+      try { this.clearHistory(sessionId); } catch (e) { /* ignore */ }
       onChunk({ type: 'complete', toolCallsExecuted: allToolResults.length });
     } catch (error) {
       console.error('Error in streaming:', error);
