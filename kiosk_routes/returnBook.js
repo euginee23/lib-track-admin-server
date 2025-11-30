@@ -182,15 +182,22 @@ router.post("/return", (req, res) => {
         });
       }
 
-      // Filter only active (not Returned)
+      // Filter only active (not Returned) - case-insensitive, trimmed
       const activeTransactions = allTransactions.filter(
-        (t) => t.status !== "Returned"
+        (t) => (typeof t.status === 'string' ? t.status.trim().toLowerCase() : '') !== "returned"
       );
 
       if (activeTransactions.length === 0) {
+        // Show actual statuses for debugging, filtered by reference_number
+        const relevantStatuses = allTransactions
+          .filter(t => t.reference_number === whereValue)
+          .map(t => ({ transaction_id: t.transaction_id, status: t.status }));
+        const statusList = relevantStatuses.map(t => t.status).join(', ');
+        console.warn(`No active transactions found for reference_number ${whereValue}. Statuses: ${statusList}`);
         return res.status(400).json({
           success: false,
-          message: "All transactions under this reference are already returned",
+          message: `All transactions under reference ${whereValue} are already returned.`,
+          statuses: relevantStatuses,
         });
       }
 
