@@ -103,7 +103,6 @@ class AIRouter {
           const papersRes = await executeTool('search_research_papers', { query: queryToUse, limit: 20 });
           if (papersRes && papersRes.success && Array.isArray(papersRes.papers) && papersRes.papers.length > 0) {
             const formatted = this.formatToolResults([{ name: 'search_research_papers', result: papersRes }], '');
-            try { this.clearHistory(sessionId); } catch (e) { /* ignore */ }
             return {
               success: true,
               message: formatted || `🔎 I found the following research papers for "${queryToUse}".`,
@@ -113,7 +112,6 @@ class AIRouter {
           }
 
           // Deterministic no-results message: avoid model-led corrections or suggestions that change the name.
-          try { this.clearHistory(sessionId); } catch (e) { /* ignore */ }
           return {
             success: true,
             message: `🔎 I searched the WMSU catalog for exact matches for "${queryToUse}" but found no results. Would you like me to try alternate spellings or search broader keywords?`,
@@ -146,10 +144,6 @@ class AIRouter {
           const maxLen = 1000;
           let out = currentResponse && currentResponse.message ? String(currentResponse.message) : '';
           out = this.truncateMessage(out, maxLen);
-
-          // Clear conversation history to manage memory for ephemeral/simple chats
-          try { this.clearHistory(sessionId); } catch (e) { /* ignore */ }
-
           return {
             success: true,
             message: out,
@@ -231,7 +225,6 @@ class AIRouter {
 
             const formattedFallback = this.formatToolResults(allToolResults, '');
             if (formattedFallback) {
-              try { this.clearHistory(sessionId); } catch (e) { /* ignore */ }
               return {
                 success: true,
                 message: formattedFallback,
@@ -251,8 +244,6 @@ class AIRouter {
 
           const formatted = this.formatToolResults(allToolResults, '');
           if (formatted) {
-            // Clear memory for this session — task completed
-            try { this.clearHistory(sessionId); } catch (e) { /* ignore */ }
             return {
               success: true,
               message: formatted,
@@ -261,9 +252,7 @@ class AIRouter {
             };
           }
         }
-
         // If no tools were executed or formatting produced nothing, return the model message
-        try { this.clearHistory(sessionId); } catch (e) { /* ignore */ }
         return {
           success: true,
           message: currentResponse.message,
@@ -272,7 +261,7 @@ class AIRouter {
         };
     } catch (error) {
       console.error('Error in AI Router:', error);
-      try { this.clearHistory(sessionId); } catch (e) { /* ignore */ }
+      // Do not automatically clear history here; history trimming is handled by ollamaService (maxHistory)
       return {
         success: false,
         error: error.message,
@@ -488,8 +477,6 @@ class AIRouter {
           const out = this.truncateMessage(resp && resp.message ? String(resp.message) : '', 1000);
           onChunk({ type: 'content', content: out });
           onChunk({ type: 'thinking', thinking: false });
-          // clear history for simple chats
-          try { this.clearHistory(sessionId); } catch (e) { /* ignore */ }
           onChunk({ type: 'complete', toolCallsExecuted: 0 });
           return;
         } catch (e) {
@@ -630,8 +617,6 @@ class AIRouter {
       // Ensure any buffered content is flushed and the thinking indicator cleared
       flushContent();
       if (thinkingSent) onChunk({ type: 'thinking', thinking: false });
-      // Clear memory after finishing streaming task
-      try { this.clearHistory(sessionId); } catch (e) { /* ignore */ }
       onChunk({ type: 'complete', toolCallsExecuted: allToolResults.length });
     } catch (error) {
       console.error('Error in streaming:', error);

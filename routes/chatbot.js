@@ -18,6 +18,11 @@ router.post('/chat', async (req, res) => {
   try {
     const { message, sessionId, userId, userName, userRole } = req.body;
 
+    // CORS headers for browser clients
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+
     if (!message || !message.trim()) {
       return res.status(400).json({
         success: false,
@@ -96,6 +101,21 @@ router.post('/chat', async (req, res) => {
   }
 });
 
+// OPTIONS handlers for CORS preflight
+router.options('/chat', (req, res) => {
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+  res.sendStatus(204);
+});
+
+router.options('/chat/stream', (req, res) => {
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+  res.sendStatus(204);
+});
+
 /**
  * POST /api/chatbot/chat/stream
  * Send a message and receive streaming response (SSE)
@@ -104,6 +124,11 @@ router.post('/chat/stream', async (req, res) => {
   try {
     const { message, sessionId, userId, userName, userRole } = req.body;
 
+    // CORS headers for browser clients
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+
     if (!message || !message.trim()) {
       return res.status(400).json({
         success: false,
@@ -111,10 +136,18 @@ router.post('/chat/stream', async (req, res) => {
       });
     }
 
-    // Set up SSE
-    res.setHeader('Content-Type', 'text/event-stream');
+    // Set up SSE and disable upstream buffering (useful behind nginx / proxies)
+    res.setHeader('Content-Type', 'text/event-stream; charset=utf-8');
+    // Ensure proxies and compression do not change the stream encoding
+    res.setHeader('Content-Encoding', 'identity');
     res.setHeader('Cache-Control', 'no-cache');
     res.setHeader('Connection', 'keep-alive');
+    // Ask proxies (nginx, etc.) not to buffer responses
+    res.setHeader('X-Accel-Buffering', 'no');
+    // Immediately flush headers so client sees the SSE stream start promptly
+    if (res.flushHeaders) {
+      try { res.flushHeaders(); } catch (e) { /* ignore */ }
+    }
 
     const currentSessionId = sessionId || aiRouter.generateSessionId(userId || 'anonymous');
 
@@ -124,36 +157,67 @@ router.post('/chat/stream', async (req, res) => {
       userRole: userRole || 'student'
     };
 
+    // Track client disconnects to avoid writing to closed sockets
+    let clientClosed = false;
+    req.on('close', () => {
+      clientClosed = true;
+      try { res.end(); } catch (e) {}
+    });
+
     // Send session ID first
-    res.write(`data: ${JSON.stringify({ type: 'session', sessionId: currentSessionId })}\n\n`);
+    const safeWrite = (obj) => {
+      if (clientClosed) return false;
+      try {
+        res.write(`data: ${JSON.stringify(obj)}\n\n`);
+        return true;
+      } catch (e) {
+        console.error('SSE write failed (client may have disconnected):', e && e.message);
+        return false;
+      }
+    };
+
+    safeWrite({ type: 'session', sessionId: currentSessionId });
 
     // If Ollama not available, send a single fallback chunk and close
     if (!ollamaService.available) {
       const offlineMsg = { type: 'content', content: "AI service is currently unavailable. Please try again later. Meanwhile, you can view FAQs in the app settings." };
-      res.write(`data: ${JSON.stringify(offlineMsg)}\n\n`);
-      res.write('data: [DONE]\n\n');
+      safeWrite(offlineMsg);
+      safeWrite('[DONE]');
       return res.end();
     }
 
-    // Stream response
-    await aiRouter.processMessageStream(
-      message,
-      currentSessionId,
-      context,
-      (chunk) => {
-        res.write(`data: ${JSON.stringify(chunk)}\n\n`);
+    // Keep-alive ping to keep proxies/clients from timing out the SSE connection
+    const keepAliveMs = 15000;
+    const keepAlive = setInterval(() => {
+      if (clientClosed) return clearInterval(keepAlive);
+      try {
+        // SSE comment line (a single colon) is a lightweight ping
+        res.write(':\n\n');
+      } catch (e) {
+        console.error('SSE keep-alive write failed:', e && e.message);
       }
-    );
+    }, keepAliveMs);
 
-    res.write('data: [DONE]\n\n');
-    res.end();
+    // Stream response
+    try {
+      await aiRouter.processMessageStream(
+        message,
+        currentSessionId,
+        context,
+        (chunk) => {
+          if (clientClosed) return; // stop writing if client disconnected
+          safeWrite(chunk);
+        }
+      );
+      if (!clientClosed) safeWrite('[DONE]');
+    } finally {
+      clearInterval(keepAlive);
+      try { if (!clientClosed) res.end(); } catch (e) { /* ignore */ }
+    }
   } catch (error) {
     console.error('Error in /chat/stream endpoint:', error);
-    res.write(`data: ${JSON.stringify({ 
-      type: 'error', 
-      error: 'Stream failed' 
-    })}\n\n`);
-    res.end();
+    try { res.write(`data: ${JSON.stringify({ type: 'error', error: 'Stream failed' })}\n\n`); } catch (e) {}
+    try { res.end(); } catch (e) {}
   }
 });
 
@@ -319,8 +383,9 @@ router.all('/proxy/*', async (req, res) => {
     // Forward status and headers
     res.status(upstream.status);
     Object.entries(upstream.headers || {}).forEach(([k, v]) => {
-      // Don't override transfer-encoding on the response
-      if (k.toLowerCase() === 'transfer-encoding') return;
+      // Don't override transfer-encoding, content-encoding, content-length or connection on the response
+      const key = (k || '').toLowerCase();
+      if (key === 'transfer-encoding' || key === 'content-encoding' || key === 'content-length' || key === 'connection') return;
       res.setHeader(k, v);
     });
 
