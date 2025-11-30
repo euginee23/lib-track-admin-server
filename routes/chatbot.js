@@ -3,6 +3,7 @@ const router = express.Router();
 const aiRouter = require('../services/aiRouter');
 const ollamaService = require('../services/ollamaService');
 const { executeTool } = require('../services/chatbotTools');
+const axios = require('axios');
 
 /**
  * Chatbot API Routes
@@ -271,3 +272,66 @@ router.post('/generate-session', (req, res) => {
 });
 
 module.exports = router;
+
+/**
+ * Proxy endpoint to forward requests to an internal HTTP-only chatbot service.
+ * This is useful when the frontend is served over HTTPS and cannot call HTTP
+ * endpoints directly (mixed-content blocked by browsers). Configure the
+ * internal target with the env var `CHATBOT_INTERNAL_URL` (default: http://127.0.0.1:3002).
+ */
+const INTERNAL_CHATBOT = process.env.CHATBOT_INTERNAL_URL || 'http://127.0.0.1:3002';
+
+// Add a catch-all proxy route mounted under /api/chatbot/proxy/*
+router.all('/proxy/*', async (req, res) => {
+  try {
+    const forwardPath = req.path.replace(/^\/proxy/, '') || '/';
+    const targetUrl = INTERNAL_CHATBOT.replace(/\/$/, '') + forwardPath;
+
+    // Diagnostic log to help debug proxying on the server
+    try {
+      console.info(`Chatbot proxy -> ${req.method} ${req.originalUrl} -> ${targetUrl}`);
+    } catch (e) {}
+
+    // Build headers to forward (omit host to allow axios to set correct host)
+    const forwardHeaders = { ...req.headers };
+    delete forwardHeaders.host;
+
+    // Use stream response for streaming endpoints
+    const axiosConfig = {
+      method: req.method,
+      url: targetUrl,
+      headers: forwardHeaders,
+      responseType: 'stream',
+      validateStatus: () => true
+    };
+
+    // For non-GET/HEAD methods, forward body
+    if (req.method !== 'GET' && req.method !== 'HEAD') {
+      axiosConfig.data = req.body;
+    }
+
+    const upstream = await axios(axiosConfig);
+
+    try {
+      console.info(`Chatbot proxy upstream responded: ${upstream.status} ${upstream.statusText || ''} for ${targetUrl}`);
+    } catch (e) {}
+
+    // Forward status and headers
+    res.status(upstream.status);
+    Object.entries(upstream.headers || {}).forEach(([k, v]) => {
+      // Don't override transfer-encoding on the response
+      if (k.toLowerCase() === 'transfer-encoding') return;
+      res.setHeader(k, v);
+    });
+
+    // Pipe the upstream response stream to client
+    upstream.data.on('error', (err) => {
+      console.error('Error piping upstream stream:', err);
+      try { res.end(); } catch (e) {}
+    });
+    upstream.data.pipe(res);
+  } catch (err) {
+    console.error('Proxy to internal chatbot failed:', err.message || err);
+    res.status(502).json({ success: false, error: 'Proxy failed', details: err.message || String(err) });
+  }
+});

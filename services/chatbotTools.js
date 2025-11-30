@@ -471,16 +471,19 @@ const toolImplementations = {
         };
       } catch (innerErr) {
         console.warn('search_research_papers primary query failed, falling back:', innerErr.message);
-        // Fallback: simpler query that only uses core research_papers columns
+        // Fallback: simpler query that still attempts to include authors
         const [papers] = await pool.query(
           `SELECT 
             rp.research_paper_id,
             rp.research_title AS title,
+            GROUP_CONCAT(DISTINCT ra.author_name) AS author,
             rp.research_abstract AS abstract,
             rp.year_publication AS publication_year,
             rp.status
           FROM research_papers rp
+          LEFT JOIN research_author ra ON rp.research_paper_id = ra.research_paper_id
           WHERE rp.research_title LIKE ? OR rp.research_abstract LIKE ?
+          GROUP BY rp.research_paper_id
           ORDER BY rp.year_publication DESC
           LIMIT ?`,
           [searchPattern, searchPattern, parseInt(limit)]

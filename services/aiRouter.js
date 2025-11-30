@@ -61,6 +61,51 @@ class AIRouter {
    */
   async processMessage(message, sessionId, context = {}) {
     try {
+      // Quick heuristic: if the user explicitly asks for a research paper, run the research-papers
+      // tool directly to avoid the model choosing the wrong tool (e.g., search_books).
+      const researchIntent = (m => {
+        if (!m) return false;
+        const mm = m.toLowerCase();
+        return /\bresearch paper\b|\bresearch papers\b|\bresearch\b|\bpaper by\b|\bpaper titled\b|\bprovide a paper\b|\bthesis\b|\bpublication\b|\bjournal\b|\bconference\b|\bproceedings\b|\bpaper\b/i.test(mm);
+      })(message);
+      if (researchIntent) {
+        try {
+          // Extract the author's name if the user used 'by <name>' syntax to avoid model rewording
+          let authorQuery = null;
+          const byMatch = message.match(/by\s+(.+)$/i);
+          if (byMatch && byMatch[1]) {
+            authorQuery = byMatch[1].trim();
+          } else {
+            // try to extract phrases like 'paper by X' or 'find paper X'
+            const genericMatch = message.match(/(?:paper|research paper|publication)\s+(?:titled\s+)?"?([^\n"]+)"?/i);
+            if (genericMatch && genericMatch[1]) authorQuery = genericMatch[1].trim();
+          }
+          const queryToUse = authorQuery || message;
+
+          const papersRes = await executeTool('search_research_papers', { query: queryToUse, limit: 20 });
+          if (papersRes && papersRes.success && Array.isArray(papersRes.papers) && papersRes.papers.length > 0) {
+            const formatted = this.formatToolResults([{ name: 'search_research_papers', result: papersRes }], '');
+            return {
+              success: true,
+              message: formatted || `🔎 I found the following research papers for "${queryToUse}".`,
+              toolCallsExecuted: 1,
+              iterations: 0
+            };
+          }
+
+          // Deterministic no-results message: avoid model-led corrections or suggestions that change the name.
+          return {
+            success: true,
+            message: `🔎 I searched the WMSU catalog for exact matches for "${queryToUse}" but found no results. Would you like me to try alternate spellings or search broader keywords?`,
+            toolCallsExecuted: 1,
+            iterations: 0
+          };
+        } catch (e) {
+          console.warn('Direct research tool lookup failed:', e && e.message);
+          // fall through to normal flow if execution fails
+        }
+      }
+
       let iteration = 0;
       let currentResponse;
       let allToolResults = [];
@@ -317,7 +362,29 @@ class AIRouter {
           lines.push('🔎 **Research Papers Found**\n');
           for (const p of res.papers) {
             const title = p.title || p.research_title || 'Unknown Title';
-            const authors = p.author || p.authors || 'Unknown Author(s)';
+            // Normalize author fields: could be string, comma-separated, or array under various keys
+            const extractAuthors = (obj) => {
+              if (!obj) return null;
+              // possible keys that may contain author info
+              const candidateKeys = ['author', 'authors', 'author_name', 'author_names', 'creators', 'creator', 'research_authors', 'contributors'];
+              for (const k of candidateKeys) {
+                if (obj[k]) {
+                  const v = obj[k];
+                  if (Array.isArray(v)) return v.join(', ');
+                  if (typeof v === 'string') return v;
+                }
+              }
+              // if obj itself is a string or array
+              if (Array.isArray(obj)) return obj.join(', ');
+              if (typeof obj === 'string') return obj;
+              return null;
+            };
+
+            let authors = extractAuthors(p) || 'Unknown Author(s)';
+            // Normalize comma-separated author lists that may lack spaces
+            if (typeof authors === 'string') {
+              authors = authors.replace(/,([^\s])/g, ', $1');
+            }
             const status = p.availability_status || p.status || 'Unknown';
             const dept = p.category || p.department_name || '';
             const year = p.publication_year || p.year_publication || '';
@@ -368,17 +435,75 @@ class AIRouter {
 
       let toolCalls = [];
       
+      // Helper: detect if a content chunk is actually serialized tool-call JSON
+      const isLikelyToolCallString = (txt) => {
+        if (!txt || typeof txt !== 'string') return false;
+        const s = txt.trim();
+        if (!(s.startsWith('{') || s.startsWith('['))) return false;
+        try {
+          const parsed = JSON.parse(s);
+          // parsed could be an array of tool-call objects or an object with "type": "function"
+          if (Array.isArray(parsed)) {
+            return parsed.length > 0 && (parsed[0].type === 'function' || parsed[0].function || parsed[0].name);
+          }
+          if (parsed && (parsed.type === 'function' || parsed.function || parsed.name)) return true;
+        } catch (e) {
+          return false;
+        }
+        return false;
+      };
+      // Reduce UI flicker by coalescing content chunks and sending one "thinking" indicator.
+      let thinkingSent = false;
+      let toolInvokingSent = false;
+      let contentBuffer = '';
+      let flushTimer = null;
+      const FLUSH_DELAY = 150; // ms
+
+      const flushContent = () => {
+        if (flushTimer) {
+          clearTimeout(flushTimer);
+          flushTimer = null;
+        }
+        if (contentBuffer && contentBuffer.length > 0) {
+          onChunk({ type: 'content', content: contentBuffer });
+          contentBuffer = '';
+        }
+      };
+
+      // Send a single thinking indicator at stream start
+      if (!thinkingSent) {
+        onChunk({ type: 'thinking', thinking: true });
+        thinkingSent = true;
+      }
+
       for await (const chunk of stream) {
         if (chunk.type === 'content') {
-          // Stream content to frontend
-          onChunk({ type: 'content', content: chunk.content });
+          // Avoid forwarding raw serialized tool-call JSON which some models emit
+          if (isLikelyToolCallString(chunk.content)) {
+            if (!toolInvokingSent) {
+              onChunk({ type: 'info', info: 'Invoking tools...' });
+              toolInvokingSent = true;
+            }
+            continue;
+          }
+
+          // Buffer small content fragments and flush in batches to avoid UI flicker
+          contentBuffer += chunk.content;
+          if (flushTimer) clearTimeout(flushTimer);
+          flushTimer = setTimeout(flushContent, FLUSH_DELAY);
+
         } else if (chunk.type === 'done') {
           toolCalls = chunk.toolCalls || [];
         } else if (chunk.type === 'error') {
+          // ensure thinking indicator is cleared on error
+          if (thinkingSent) onChunk({ type: 'thinking', thinking: false });
           onChunk({ type: 'error', error: chunk.error });
           return;
         }
       }
+
+      // flush any remaining buffered content after the stream ends
+      flushContent();
 
       // Handle tool calls if any
       while (toolCalls.length > 0 && iteration < this.maxToolIterations) {
@@ -407,10 +532,31 @@ class AIRouter {
         // Format tool results server-side if possible so streaming clients get
         // a nicely laid out message (avoids compact single-line responses).
         const formatted = this.formatToolResults(allToolResults, continueResponse.message);
-        onChunk({ type: 'content', content: formatted || continueResponse.message });
+        const outMsg = formatted || continueResponse.message;
+        // Avoid sending raw serialized tool-call JSON — append to buffer/flush instead
+        if (isLikelyToolCallString(outMsg)) {
+          if (!toolInvokingSent) {
+            onChunk({ type: 'info', info: 'Tool invocation completed. Preparing results...' });
+            toolInvokingSent = true;
+          }
+        } else {
+          // Buffer formatted content and flush shortly to avoid flicker
+          contentBuffer += outMsg;
+          if (flushTimer) clearTimeout(flushTimer);
+          flushTimer = setTimeout(() => {
+            if (contentBuffer) {
+              onChunk({ type: 'content', content: contentBuffer });
+              contentBuffer = '';
+            }
+            if (thinkingSent) onChunk({ type: 'thinking', thinking: false });
+          }, FLUSH_DELAY);
+        }
         toolCalls = continueResponse.toolCalls || [];
       }
 
+      // Ensure any buffered content is flushed and the thinking indicator cleared
+      flushContent();
+      if (thinkingSent) onChunk({ type: 'thinking', thinking: false });
       onChunk({ type: 'complete', toolCallsExecuted: allToolResults.length });
     } catch (error) {
       console.error('Error in streaming:', error);
