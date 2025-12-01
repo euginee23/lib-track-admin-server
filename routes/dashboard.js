@@ -149,6 +149,104 @@ router.get('/analytics', async (req, res) => {
       ORDER BY m.month ASC
     `);
 
+    // 7. Overdue and Fines Trend (last 6 months)
+    const [overdueFineTrend] = await pool.execute(`
+      WITH months AS (
+        SELECT DATE_FORMAT(DATE_SUB(CURDATE(), INTERVAL seq.n MONTH), '%Y-%m') AS month,
+               DATE_FORMAT(DATE_SUB(CURDATE(), INTERVAL seq.n MONTH), '%b %Y') AS month_label
+        FROM (
+          SELECT 0 AS n UNION ALL SELECT 1 UNION ALL SELECT 2
+          UNION ALL SELECT 3 UNION ALL SELECT 4 UNION ALL SELECT 5
+        ) seq
+      )
+      SELECT 
+        m.month, 
+        m.month_label,
+        COALESCE(overdue.overdue_count, 0) AS overdue_count,
+        COALESCE(fines.fines_collected, 0) AS fines_collected
+      FROM months m
+      LEFT JOIN (
+        SELECT 
+          DATE_FORMAT(t.transaction_date, '%Y-%m') AS month,
+          COUNT(DISTINCT t.transaction_id) AS overdue_count
+        FROM transactions t
+        WHERE t.return_date IS NULL
+          AND t.due_date IS NOT NULL
+          AND STR_TO_DATE(t.due_date, '%Y-%m-%d') < CURDATE()
+          AND t.transaction_date >= DATE_SUB(CURDATE(), INTERVAL 6 MONTH)
+        GROUP BY DATE_FORMAT(t.transaction_date, '%Y-%m')
+      ) overdue ON overdue.month = m.month
+      LEFT JOIN (
+        SELECT 
+          DATE_FORMAT(t.transaction_date, '%Y-%m') AS month,
+          SUM(p.fine) AS fines_collected
+        FROM penalties p
+        LEFT JOIN transactions t ON p.transaction_id = t.transaction_id
+        WHERE p.status = 'Paid'
+          AND t.transaction_date >= DATE_SUB(CURDATE(), INTERVAL 6 MONTH)
+        GROUP BY DATE_FORMAT(t.transaction_date, '%Y-%m')
+      ) fines ON fines.month = m.month
+      ORDER BY m.month ASC
+    `);
+
+    // 8. Total Books and Research Papers Count
+    const [booksCount] = await pool.execute(`
+      SELECT COUNT(DISTINCT batch_registration_key) as total_books,
+             COUNT(*) as total_book_copies
+      FROM books
+    `);
+
+    const [researchCount] = await pool.execute(`
+      SELECT COUNT(*) as total_research
+      FROM research_papers
+    `);
+
+    // 9. Top Borrowed Authors
+    const [topAuthors] = await pool.execute(`
+      SELECT 
+        ba.book_author as author,
+        COUNT(t.transaction_id) as borrow_count,
+        COUNT(DISTINCT t.user_id) as unique_borrowers
+      FROM transactions t
+      INNER JOIN books b ON t.book_id = b.book_id
+      LEFT JOIN book_author ba ON b.book_author_id = ba.book_author_id
+      WHERE ba.book_author IS NOT NULL AND ba.book_author != ''
+        AND (${dateCondition})
+      GROUP BY ba.book_author_id, ba.book_author
+      ORDER BY borrow_count DESC
+      LIMIT 10
+    `);
+
+    // 10. Top Borrowed Genres
+    const [topGenres] = await pool.execute(`
+      SELECT 
+        CASE 
+          WHEN b.isUsingDepartment = 1 THEN d.department_name
+          ELSE bg.book_genre
+        END as genre,
+        COUNT(t.transaction_id) as borrow_count,
+        COUNT(DISTINCT t.user_id) as unique_borrowers
+      FROM transactions t
+      INNER JOIN books b ON t.book_id = b.book_id
+      LEFT JOIN book_genre bg ON b.book_genre_id = bg.book_genre_id AND b.isUsingDepartment = 0
+      LEFT JOIN departments d ON b.book_genre_id = d.department_id AND b.isUsingDepartment = 1
+      WHERE (bg.book_genre IS NOT NULL OR d.department_name IS NOT NULL)
+        AND (${dateCondition})
+      GROUP BY genre
+      ORDER BY borrow_count DESC
+      LIMIT 10
+    `);
+
+    // 11. Pending Registration Approvals
+    const [pendingRegistrations] = await pool.execute(`
+      SELECT 
+        COUNT(*) as total_pending,
+        COUNT(CASE WHEN position = 'Student' OR position IS NULL THEN 1 END) as student_pending,
+        COUNT(CASE WHEN position != 'Student' AND position IS NOT NULL THEN 1 END) as faculty_pending
+      FROM users
+      WHERE librarian_approval = 0 OR librarian_approval IS NULL
+    `);
+
     res.json({
       success: true,
       data: {
@@ -173,7 +271,21 @@ router.get('/analytics', async (req, res) => {
         },
         topDepartments: topDepartments || [],
         topBorrowers: topBorrowers || [],
-        monthlyTrend: monthlyTrend || []
+        monthlyTrend: monthlyTrend || [],
+        overdueFineTrend: overdueFineTrend || [],
+        collectionStats: {
+          totalBooks: booksCount[0]?.total_books || 0,
+          totalBookCopies: booksCount[0]?.total_book_copies || 0,
+          totalResearch: researchCount[0]?.total_research || 0,
+          totalItems: (booksCount[0]?.total_books || 0) + (researchCount[0]?.total_research || 0)
+        },
+        topAuthors: topAuthors || [],
+        topGenres: topGenres || [],
+        pendingRegistrations: {
+          total: pendingRegistrations[0]?.total_pending || 0,
+          students: pendingRegistrations[0]?.student_pending || 0,
+          faculty: pendingRegistrations[0]?.faculty_pending || 0
+        }
       }
     });
 
