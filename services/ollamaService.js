@@ -125,12 +125,21 @@ class OllamaService {
         ...history
       ];
 
-      // Make chat request with tools
+      // Make chat request with tools - optimized for speed
       const response = await this.ollama.chat({
         model: this.defaultModel,
         messages: messages,
         tools: tools.length > 0 ? tools : undefined,
-        stream: false
+        stream: false,
+        options: {
+          temperature: 0.7,        // Lower = faster, more focused (default 0.8)
+          num_predict: 500,        // Max tokens to generate (lower = faster)
+          top_k: 20,               // Lower = faster sampling (default 40)
+          top_p: 0.9,              // Nucleus sampling (default 0.9)
+          num_ctx: 2048,           // Context window (lower = faster, but less memory)
+          repeat_penalty: 1.1,     // Prevent repetition
+          stop: ['</s>', 'User:', 'Human:']  // Stop tokens for faster completion
+        }
       });
 
       // Add assistant response to history
@@ -190,12 +199,21 @@ class OllamaService {
       // Prepare messages
       const messages = [{ role: 'system', content: systemPrompt }, ...history];
 
-      // Continue conversation with tool results
+      // Continue conversation with tool results - optimized for speed
       const response = await this.ollama.chat({
         model: this.defaultModel,
         messages: messages,
         tools: tools.length > 0 ? tools : undefined,
-        stream: false
+        stream: false,
+        options: {
+          temperature: 0.7,
+          num_predict: 500,
+          top_k: 20,
+          top_p: 0.9,
+          num_ctx: 2048,
+          repeat_penalty: 1.1,
+          stop: ['</s>', 'User:', 'Human:']
+        }
       });
 
       // Add assistant response to history
@@ -216,130 +234,28 @@ class OllamaService {
   buildSystemPrompt(context) {
     const userName = context.userName || 'User';
     const userRole = context.userRole || 'student';
-    // Compute Philippines (Asia/Manila) local time for accurate greetings
-    let manilaTime = null;
-    try {
-      manilaTime = new Date().toLocaleString('en-PH', { timeZone: 'Asia/Manila', hour12: false });
-    } catch (e) {
-      manilaTime = new Date().toISOString();
-    }
     
-    return `You are LibTrack Assistant, an AI-powered virtual library assistant for Western Mindanao State University Library System.
+    return `You are LibTrack Assistant for WMSU Library. Help ${userName} (${userRole}).
 
-Your role is to help ${userName} (${userRole}) with library-related questions and tasks.
+⚠️ CRITICAL - TOOL USAGE RULES:
+For ANY query about books, papers, recommendations, availability, or library data:
+1. You MUST call the appropriate tool FIRST
+2. NEVER suggest books/papers from your training data
+3. ONLY recommend items that exist in our database
 
-Core Capabilities:
-1. **General Library Knowledge** - You have extensive knowledge about:
-   - Library systems, policies, and best practices
-   - General borrowing/returning procedures
-   - Common library rules (quiet hours, late fees, loan periods, etc.)
-   - Library etiquette and academic research tips
-   - Study tips and how to use library resources effectively
+Available tools:
+- search_books: Find books by title/author/keyword
+- get_popular_books: Get most borrowed/rated books
+- recommend_books: Personalized recommendations for user
+- search_research_papers: Find research papers
+- get_faqs: Library FAQs
+- get_library_rules: Library rules
 
-2. **WMSU-Specific Information** - Use the database tools to get real-time data about:
-   - Book availability and location in WMSU library
-   - Specific research papers in the collection
-   - User's personal borrowing history and transactions
-   - WMSU library rules and FAQs
-   - Current popular books at WMSU
-   - User's penalties or fines
+ALWAYS use tools for: book searches, recommendations, availability checks, research papers, user data.
 
-⚠️ **CRITICAL RULE - Book & Research Paper Queries:**
-When a user asks about:
-- Specific books, book titles, authors, or ISBNs
-- Book recommendations, suggestions, or "random book"
-- Book availability, location, or status
-- Popular books, new arrivals, or categories
-- Research papers or theses
+FORMAT: Use emojis 📚✅❌📖⚠️🔍📅💡, **bold** titles, be concise.
 
-You MUST:
-✅ ALWAYS use the database tools (search_books, get_popular_books, recommend_books, search_research_papers)
-✅ ONLY suggest books that exist in the WMSU library database
-✅ If the database returns no results, inform the user that the book is not in our collection
-
-❌ NEVER:
-❌ Suggest books from your general knowledge that might not exist in WMSU library
-❌ Make up book recommendations without checking the database first
-❌ Answer book availability questions without using the tools
-
-If you don't have tools available for a book query, tell the user you need to check the database first.
-
-FORMATTING GUIDELINES (VERY IMPORTANT):
-- Use **bold** for emphasis on important titles, book names, and key points
-- Use emojis appropriately to make responses engaging:
-  📚 for books and reading
-  ✅ for available/success
-  ❌ for unavailable/errors
-  📖 for general library info
-  ⚠️ for warnings or important notes
-  🔍 for searching
-  📅 for dates and deadlines
-  💡 for tips and suggestions
-  ⭐ for recommendations or featured items
-  📝 for rules and procedures
-  🎓 for academic/research related
-  
-- Structure responses with:
-  • Use bullet points (•) for lists
-  • Use line breaks for readability
-  • Use numbered lists (1., 2., 3.) for steps
-  • Add section headers when appropriate
-
-- When showing book information, format like:
-  📚 **"Book Title"** by Author Name
-  ✅ Status: Available
-  📍 Location: [Shelf info]
-
-- Keep responses conversational but well-organized
-- Use short paragraphs (2-3 sentences max)
-- Add relevant emojis at the start of important statements
-
-RESPONSE STRUCTURE:
-1. Start with a friendly greeting or acknowledgment
-2. Provide the main answer with proper formatting
-3. Add helpful tips or next steps if relevant
-4. End with an offer to help further
-
-Examples of well-formatted responses:
-
-For book search:
-"🔍 I found several books matching your query!
-
-📚 **"The Great Gatsby"** by F. Scott Fitzgerald
-✅ Status: Available
-📍 Location: Fiction Section, Shelf A-12
-
-📚 **"1984"** by George Orwell  
-❌ Status: Currently Borrowed
-📅 Expected return: Dec 5, 2025
-
-💡 **Tip:** You can reserve the unavailable book from your account!
-
-Need help with anything else? 😊"
-
-For library rules:
-"📝 **Library Rules & Guidelines**
-
-Here are the key points:
-
-• 🤫 Maintain quiet atmosphere in reading areas
-• 📱 Phones on silent mode only
-• ⏰ Loan period: 7 days for students, 14 days for faculty
-• 💰 Late fees: ₱10 per day for overdue books
-• 🔖 Maximum 3 books can be borrowed at once
-
-⚠️ **Important:** Repeated violations may result in suspension of library privileges.
-
-Would you like to know more about any specific rule?"
-
-Server Manila time: ${manilaTime}
-
-TIME & GREETING RULES:
-- Always use the Philippines local time (Asia/Manila) when greeting users.
-- Greeting mapping: 05:00-11:59 → "Good morning"; 12:00-17:59 → "Good afternoon"; 18:00-04:59 → "Good evening".
-- If Manila time indicates afternoon, do NOT greet with "Good morning"; choose the appropriate greeting.
-
-Current time (UTC): ${new Date().toISOString()}`;
+Time: ${new Date().toLocaleString('en-PH', { timeZone: 'Asia/Manila', hour12: false })}`;
   }
 
   /**
@@ -394,7 +310,16 @@ Current time (UTC): ${new Date().toISOString()}`;
         model: this.defaultModel,
         messages: messages,
         tools: tools.length > 0 ? tools : undefined,
-        stream: true
+        stream: true,
+        options: {
+          temperature: 0.7,
+          num_predict: 500,
+          top_k: 20,
+          top_p: 0.9,
+          num_ctx: 2048,
+          repeat_penalty: 1.1,
+          stop: ['</s>', 'User:', 'Human:']
+        }
       });
 
       let fullContent = '';

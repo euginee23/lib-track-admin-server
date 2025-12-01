@@ -115,7 +115,7 @@ app.use('/api/users', require('./user_routes/updateUsers'));
 app.use('/api/users', require('./user_routes/login'));
 
 // USER PROFILE ROUTE
-app.use('/api/users', require('./user_routes/profile'));
+app.use('/api/user', require('./user_routes/profile'));
 
 // NOTIFICATIONS ROUTE
 app.use('/api/notifications', require('./user_routes/notifications'));

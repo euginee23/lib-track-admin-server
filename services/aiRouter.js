@@ -79,6 +79,112 @@ class AIRouter {
    */
   async processMessage(message, sessionId, context = {}) {
     try {
+      // Direct handler for book recommendations - bypass AI and call tool directly
+      const recommendIntent = (m => {
+        if (!m) return false;
+        const mm = m.toLowerCase();
+        // Match: "recommend", "suggest", "what should I read" patterns
+        return /\b(recommend|suggest|what\s+(should|can|would|to)\s+(i|you)\s+read)\b.*\bbook/i.test(mm) || 
+               /\bbook\b.*(recommend|suggest|for\s+me)/i.test(mm);
+      })(message);
+      
+      if (recommendIntent) {
+        try {
+          console.log('🎯 Book recommendation request detected - calling recommend_books tool');
+          
+          // Try personalized recommendations first
+          if (context.userId) {
+            const recResult = await executeTool('recommend_books', { 
+              user_id: context.userId,
+              limit: 5
+            });
+            
+            if (recResult && recResult.success && Array.isArray(recResult.recommendations) && recResult.recommendations.length > 0) {
+              const formatted = this.formatToolResults([{ name: 'recommend_books', result: recResult }], '');
+              try { this.clearHistory(sessionId); } catch (e) { /* ignore */ }
+              return {
+                success: true,
+                message: formatted || '📚 Here are some book recommendations for you!',
+                toolCallsExecuted: 1,
+                iterations: 0
+              };
+            }
+          }
+          
+          // If no personalized recommendations or no user ID, use popular books
+          console.log('⭐ Using popular books as recommendations...');
+          const popularResult = await executeTool('get_popular_books', { 
+            type: 'most_borrowed',
+            limit: 5
+          });
+          
+          if (popularResult && popularResult.success && Array.isArray(popularResult.books) && popularResult.books.length > 0) {
+            const formatted = this.formatToolResults([{ name: 'get_popular_books', result: popularResult }], '');
+            try { this.clearHistory(sessionId); } catch (e) { /* ignore */ }
+            return {
+              success: true,
+              message: formatted || '⭐ Here are our most popular books!',
+              toolCallsExecuted: 1,
+              iterations: 0
+            };
+          }
+          
+          // If still nothing, return a proper message
+          try { this.clearHistory(sessionId); } catch (e) { /* ignore */ }
+          return {
+            success: true,
+            message: "📚 I'd love to recommend books, but I'm having trouble accessing our catalog right now. Please try again in a moment.",
+            toolCallsExecuted: 1,
+            iterations: 0
+          };
+        } catch (e) {
+          console.warn('Direct recommendation lookup failed:', e && e.message);
+          // fall through to normal AI flow
+        }
+      }
+      
+      // Direct handler for research paper recommendations
+      const researchRecommendIntent = (m => {
+        if (!m) return false;
+        const mm = m.toLowerCase();
+        return /\b(recommend|suggest|what\s+(should|can|would)\s+(i|you)\s+read)\b.*(research|paper|thesis)/i.test(mm) || 
+               /\b(research|paper|thesis)\b.*(recommend|suggest|for\s+me)/i.test(mm);
+      })(message);
+      
+      if (researchRecommendIntent) {
+        try {
+          console.log('🎯 Research paper recommendation request detected - calling recommend_research_papers tool');
+          
+          const recResult = await executeTool('recommend_research_papers', { 
+            user_id: context.userId || null,
+            limit: 5
+          });
+          
+          if (recResult && recResult.success && Array.isArray(recResult.papers) && recResult.papers.length > 0) {
+            const formatted = this.formatToolResults([{ name: 'recommend_research_papers', result: recResult }], '');
+            try { this.clearHistory(sessionId); } catch (e) { /* ignore */ }
+            return {
+              success: true,
+              message: formatted || '📄 Here are some research paper recommendations for you!',
+              toolCallsExecuted: 1,
+              iterations: 0
+            };
+          }
+          
+          // If no recommendations available
+          try { this.clearHistory(sessionId); } catch (e) { /* ignore */ }
+          return {
+            success: true,
+            message: "📄 I'd love to recommend research papers, but I'm having trouble accessing our repository right now. Please try searching for papers by topic instead.",
+            toolCallsExecuted: 1,
+            iterations: 0
+          };
+        } catch (e) {
+          console.warn('Direct research paper recommendation failed:', e && e.message);
+          // fall through to normal AI flow
+        }
+      }
+      
       // Quick heuristic: if the user explicitly asks for a research paper, run the research-papers
       // tool directly to avoid the model choosing the wrong tool (e.g., search_books).
       const researchIntent = (m => {
@@ -324,14 +430,15 @@ class AIRouter {
           }
 
           const lines = [];
-          lines.push('🔍 **Search Results**\n');
+          lines.push('**Search Results**\n');
           for (const [_, e] of map) {
-            const locArr = Array.from(e.locations).slice(0, 6);
-            const copies = e.statusCounts.available + e.statusCounts.not_available;
-            lines.push(`📚 **${e.title}** by ${e.author}`);
-            if (e.publication_year) lines.push(`📅 Year: ${e.publication_year}`);
-            lines.push(`✅ Copies: ${copies} • Available: ${e.statusCounts.available}`);
-            if (locArr.length > 0) lines.push(`📍 Locations: ${locArr.join(', ')}`);
+            const locArr = Array.from(e.locations).slice(0, 3);
+            const avail = e.statusCounts.available;
+            lines.push(`📚 **${e.title}**`);
+            lines.push(`   by ${e.author}`);
+            if (e.publication_year) lines.push(`   Year: ${e.publication_year}`);
+            lines.push(`   ${avail > 0 ? '✅ Available' : '❌ Not Available'} (${avail} copies)`);
+            if (locArr.length > 0) lines.push(`   Location: ${locArr.join(', ')}`);
             lines.push('');
           }
 
@@ -340,15 +447,15 @@ class AIRouter {
 
         if (name === 'get_popular_books' && Array.isArray(res.books) && res.books.length > 0) {
           const lines = [];
-          lines.push('⭐ **Recommended Popular Books**\n');
+          lines.push('**Popular Books**\n');
           for (const b of res.books) {
             const title = b.book_title || b.title || 'Unknown Title';
             const author = b.author || 'Unknown Author';
-            const status = b.status || 'Unknown';
-            const borrowCount = b.borrow_count != null ? `(${b.borrow_count} borrowings)` : '';
-            lines.push(`📚 **${title}** by ${author} ${borrowCount}`);
-            lines.push(`✅ Status: ${status}`);
-            if (b.category) lines.push(`📂 Category: ${b.category}`);
+            const isAvailable = b.status && b.status.toLowerCase().includes('available');
+            lines.push(`📚 **${title}**`);
+            lines.push(`   by ${author}`);
+            lines.push(`   ${isAvailable ? '✅ Available' : '❌ Not Available'}`);
+            if (b.category) lines.push(`   Category: ${b.category}`);
             lines.push('');
           }
           return lines.join('\n');
@@ -356,14 +463,17 @@ class AIRouter {
 
         if (name === 'recommend_books' && Array.isArray(res.recommendations) && res.recommendations.length > 0) {
           const lines = [];
-          lines.push('💡 **Personalized Recommendations**\n');
+          lines.push('**Book Recommendations**\n');
           for (const b of res.recommendations) {
             const title = b.title || b.book_title || 'Unknown Title';
             const author = b.author || 'Unknown Author';
-            const status = b.status || 'Unknown';
-            lines.push(`📚 **${title}** by ${author}`);
-            lines.push(`✅ Status: ${status}`);
-            if (b.average_rating) lines.push(`⭐ Rating: ${Number(b.average_rating).toFixed(1)} (${b.rating_count || 0} ratings)`);
+            const isAvailable = b.status && b.status.toLowerCase().includes('available');
+            const availCopies = b.available_copies || 0;
+            const totalCopies = b.total_copies || 0;
+            lines.push(`📚 **${title}**`);
+            lines.push(`   by ${author}`);
+            lines.push(`   ${isAvailable ? '✅ Available' : '❌ Not Available'} (${availCopies}/${totalCopies} copies)`);
+            if (b.average_rating && b.average_rating > 0) lines.push(`   Rating: ${Number(b.average_rating).toFixed(1)}/5`);
             lines.push('');
           }
           return lines.join('\n');
@@ -410,7 +520,7 @@ class AIRouter {
         // research paper search results
         if (name === 'search_research_papers' && Array.isArray(res.papers) && res.papers.length > 0) {
           const lines = [];
-          lines.push('🔎 **Research Papers Found**\n');
+          lines.push('**Research Papers Found**\n');
           for (const p of res.papers) {
             const title = p.title || p.research_title || 'Unknown Title';
             // Normalize author fields: could be string, comma-separated, or array under various keys
@@ -441,11 +551,30 @@ class AIRouter {
             const year = p.publication_year || p.year_publication || '';
 
             lines.push(`📄 **${title}**`);
-            lines.push(`👥 Authors: ${authors}`);
-            if (year) lines.push(`📅 Year: ${year}`);
-            lines.push(`✅ Status: ${status}`);
-            if (dept) lines.push(`🏷️ Department: ${dept}`);
-            if (p.research_abstract) lines.push(`📝 Abstract: ${p.research_abstract.substring(0, 300)}${p.research_abstract.length > 300 ? '...' : ''}`);
+            lines.push(`   by ${authors}`);
+            if (year) lines.push(`   Year: ${year}`);
+            lines.push(`   ${status === 'Available' ? '✅ Available' : '❌ Not Available'}`);
+            if (dept) lines.push(`   Department: ${dept}`);
+            lines.push('');
+          }
+          return lines.join('\n');
+        }
+
+        // research paper recommendations
+        if (name === 'recommend_research_papers' && Array.isArray(res.papers) && res.papers.length > 0) {
+          const lines = [];
+          lines.push('**Research Paper Recommendations**\n');
+          for (const p of res.papers) {
+            const title = p.title || p.research_title || 'Unknown Title';
+            const authors = p.authors || p.research_authors || 'Unknown Author(s)';
+            const year = p.year_publication || '';
+            const dept = p.category || p.department_name || '';
+
+            lines.push(`📄 **${title}**`);
+            lines.push(`   by ${authors}`);
+            if (year) lines.push(`   Year: ${year}`);
+            lines.push(`   ✅ Available`);
+            if (dept) lines.push(`   Department: ${dept}`);
             lines.push('');
           }
           return lines.join('\n');

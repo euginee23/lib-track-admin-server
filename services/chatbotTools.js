@@ -73,6 +73,27 @@ const toolDefinitions = [
   {
     type: 'function',
     function: {
+      name: 'recommend_research_papers',
+      description: 'Get personalized research paper recommendations based on user department and preferences.',
+      parameters: {
+        type: 'object',
+        properties: {
+          user_id: {
+            type: 'number',
+            description: 'The user ID for personalized recommendations'
+          },
+          limit: {
+            type: 'number',
+            description: 'Number of recommendations (default: 5)',
+            default: 5
+          }
+        }
+      }
+    }
+  },
+  {
+    type: 'function',
+    function: {
       name: 'get_faqs',
       description: 'Retrieve frequently asked questions about the library system. Useful for answering common queries about policies, services, and procedures.',
       parameters: {
@@ -728,83 +749,271 @@ const toolImplementations = {
 
   /**
    * Recommend books based on user history
+   * Smart algorithm:
+   * 1. Check user's transaction history for preferences
+   * 2. If no history, check user's department
+   * 3. Prioritize highly rated and most borrowed books
    */
   recommend_books: async ({ user_id, category, limit = 5 }) => {
     try {
-      // Get user's borrowing history to understand preferences
-      const [userHistory] = await pool.query(
-        `SELECT DISTINCT 
-          CASE 
-            WHEN b.isUsingDepartment = 1 THEN d.department_name 
-            ELSE bg.book_genre 
-          END AS category
-         FROM transactions t
-         INNER JOIN books b ON t.book_id = b.book_id
-         LEFT JOIN book_genre bg ON b.book_genre_id = bg.book_genre_id AND b.isUsingDepartment = 0
-         LEFT JOIN departments d ON b.book_genre_id = d.department_id AND b.isUsingDepartment = 1
-         WHERE t.user_id = ?
-         GROUP BY category
-         ORDER BY COUNT(*) DESC
-         LIMIT 3`,
-        [user_id]
-      );
+      let recommendations = [];
+      
+      // STEP 1: Try to get recommendations based on user's borrowing history
+      if (user_id) {
+        const [userHistory] = await pool.query(
+          `SELECT DISTINCT 
+            CASE 
+              WHEN b.isUsingDepartment = 1 THEN d.department_name 
+              ELSE bg.book_genre 
+            END AS category,
+            COUNT(*) as borrow_count
+           FROM transactions t
+           INNER JOIN books b ON t.book_id = b.book_id
+           LEFT JOIN book_genre bg ON b.book_genre_id = bg.book_genre_id AND b.isUsingDepartment = 0
+           LEFT JOIN departments d ON b.book_genre_id = d.department_id AND b.isUsingDepartment = 1
+           WHERE t.user_id = ? AND t.transaction_type = 'borrow'
+           GROUP BY category
+           ORDER BY borrow_count DESC
+           LIMIT 2`,
+          [user_id]
+        );
 
-      const preferredCategories = userHistory.map(row => row.category);
+        const preferredCategories = userHistory.map(row => row.category).filter(c => c);
 
-      // Build recommendation query
-      let query = `
-        SELECT 
-          b.book_id,
-          b.book_title as title,
-          b.book_title as book_title,
-          ba.book_author AS author,
-          CASE 
-            WHEN b.isUsingDepartment = 1 THEN d.department_name 
-            ELSE bg.book_genre 
-          END AS category,
-          b.status,
-          AVG(r.star_rating) as average_rating,
-          COUNT(r.rating_id) as rating_count
-        FROM books b
-        LEFT JOIN book_author ba ON b.book_author_id = ba.book_author_id
-        LEFT JOIN book_genre bg ON b.book_genre_id = bg.book_genre_id AND b.isUsingDepartment = 0
-        LEFT JOIN departments d ON b.book_genre_id = d.department_id AND b.isUsingDepartment = 1
-        LEFT JOIN ratings r ON b.book_id = r.book_id
-        WHERE b.status = 'Available'
-          AND b.book_id NOT IN (
-            SELECT book_id FROM transactions 
-            WHERE user_id = ? AND status = 'borrowed'
-          )
-      `;
-      const params = [user_id];
+        // If user has borrowing history, recommend from their preferred categories
+        if (preferredCategories.length > 0) {
+          console.log(`📚 Found user preferences: ${preferredCategories.join(', ')}`);
+          
+          const placeholders = preferredCategories.map(() => '?').join(',');
+          const [historyBasedRecs] = await pool.query(
+            `SELECT 
+              b.book_title as title,
+              ba.book_author AS author,
+              CASE 
+                WHEN b.isUsingDepartment = 1 THEN d.department_name 
+                ELSE bg.book_genre 
+              END AS category,
+              COUNT(DISTINCT b.book_id) as total_copies,
+              SUM(CASE WHEN b.status = 'Available' THEN 1 ELSE 0 END) as available_copies,
+              CASE 
+                WHEN SUM(CASE WHEN b.status = 'Available' THEN 1 ELSE 0 END) > 0 
+                THEN 'Available' 
+                ELSE 'Not Available' 
+              END as status,
+              COALESCE(AVG(r.star_rating), 0) as average_rating,
+              COUNT(DISTINCT r.rating_id) as rating_count,
+              COUNT(DISTINCT t.transaction_id) as borrow_count
+            FROM books b
+            LEFT JOIN book_author ba ON b.book_author_id = ba.book_author_id
+            LEFT JOIN book_genre bg ON b.book_genre_id = bg.book_genre_id AND b.isUsingDepartment = 0
+            LEFT JOIN departments d ON b.book_genre_id = d.department_id AND b.isUsingDepartment = 1
+            LEFT JOIN ratings r ON b.book_id = r.book_id
+            LEFT JOIN transactions t ON b.book_id = t.book_id AND t.transaction_type = 'borrow'
+            WHERE (
+              (b.isUsingDepartment = 1 AND d.department_name IN (${placeholders}))
+              OR (b.isUsingDepartment = 0 AND bg.book_genre IN (${placeholders}))
+            )
+            AND b.book_title NOT IN (
+              SELECT DISTINCT bk.book_title FROM books bk
+              INNER JOIN transactions tr ON bk.book_id = tr.book_id
+              WHERE tr.user_id = ? AND tr.transaction_type = 'borrow'
+            )
+            GROUP BY b.book_title, ba.book_author, category
+            HAVING available_copies > 0
+            ORDER BY 
+              average_rating DESC,
+              borrow_count DESC,
+              rating_count DESC
+            LIMIT ?`,
+            [...preferredCategories, ...preferredCategories, user_id, parseInt(limit)]
+          );
 
-      if (category) {
-        query += ` AND (bg.book_genre = ? OR d.department_name = ?)`;
-        params.push(category);
-        params.push(category);
-      } else if (preferredCategories.length > 0) {
-        const placeholders = preferredCategories.map(() => '?').join(',');
-        query += ` AND (bg.book_genre IN (${placeholders}) OR d.department_name IN (${placeholders}))`;
-        params.push(...preferredCategories, ...preferredCategories);
+          recommendations = historyBasedRecs;
+        }
       }
 
-      query += `
-        GROUP BY b.book_id
-        ORDER BY average_rating DESC, rating_count DESC, b.created_at DESC
-        LIMIT ?
-      `;
-      params.push(parseInt(limit));
+      // STEP 2: If no recommendations yet, try user's department
+      if (recommendations.length === 0 && user_id) {
+        console.log('📚 No history found, checking user department...');
+        
+        const [userInfo] = await pool.query(
+          `SELECT u.department_id, d.department_name
+           FROM users u
+           LEFT JOIN departments d ON u.department_id = d.department_id
+           WHERE u.user_id = ?`,
+          [user_id]
+        );
 
-      const [recommendations] = await pool.query(query, params);
+        if (userInfo.length > 0 && userInfo[0].department_name) {
+          const userDept = userInfo[0].department_name;
+          console.log(`📚 User department: ${userDept}`);
+
+          const [deptBasedRecs] = await pool.query(
+            `SELECT 
+              b.book_title as title,
+              ba.book_author AS author,
+              d.department_name AS category,
+              COUNT(DISTINCT b.book_id) as total_copies,
+              SUM(CASE WHEN b.status = 'Available' THEN 1 ELSE 0 END) as available_copies,
+              CASE 
+                WHEN SUM(CASE WHEN b.status = 'Available' THEN 1 ELSE 0 END) > 0 
+                THEN 'Available' 
+                ELSE 'Not Available' 
+              END as status,
+              COALESCE(AVG(r.star_rating), 0) as average_rating,
+              COUNT(DISTINCT r.rating_id) as rating_count,
+              COUNT(DISTINCT t.transaction_id) as borrow_count
+            FROM books b
+            LEFT JOIN book_author ba ON b.book_author_id = ba.book_author_id
+            INNER JOIN departments d ON b.book_genre_id = d.department_id
+            LEFT JOIN ratings r ON b.book_id = r.book_id
+            LEFT JOIN transactions t ON b.book_id = t.book_id AND t.transaction_type = 'borrow'
+            WHERE b.isUsingDepartment = 1 
+            AND d.department_name = ?
+            GROUP BY b.book_title, ba.book_author, d.department_name
+            HAVING available_copies > 0
+            ORDER BY 
+              average_rating DESC,
+              borrow_count DESC,
+              rating_count DESC
+            LIMIT ?`,
+            [userDept, parseInt(limit)]
+          );
+
+          recommendations = deptBasedRecs;
+        }
+      }
+
+      // STEP 3: If still no recommendations, get highest rated and most borrowed books
+      if (recommendations.length === 0) {
+        console.log('📚 Using general recommendations (highest rated & most borrowed)...');
+        
+        const [generalRecs] = await pool.query(
+          `SELECT 
+            b.book_title as title,
+            ba.book_author AS author,
+            CASE 
+              WHEN b.isUsingDepartment = 1 THEN d.department_name 
+              ELSE bg.book_genre 
+            END AS category,
+            COUNT(DISTINCT b.book_id) as total_copies,
+            SUM(CASE WHEN b.status = 'Available' THEN 1 ELSE 0 END) as available_copies,
+            CASE 
+              WHEN SUM(CASE WHEN b.status = 'Available' THEN 1 ELSE 0 END) > 0 
+              THEN 'Available' 
+              ELSE 'Not Available' 
+            END as status,
+            COALESCE(AVG(r.star_rating), 0) as average_rating,
+            COUNT(DISTINCT r.rating_id) as rating_count,
+            COUNT(DISTINCT t.transaction_id) as borrow_count
+          FROM books b
+          LEFT JOIN book_author ba ON b.book_author_id = ba.book_author_id
+          LEFT JOIN book_genre bg ON b.book_genre_id = bg.book_genre_id AND b.isUsingDepartment = 0
+          LEFT JOIN departments d ON b.book_genre_id = d.department_id AND b.isUsingDepartment = 1
+          LEFT JOIN ratings r ON b.book_id = r.book_id
+          LEFT JOIN transactions t ON b.book_id = t.book_id AND t.transaction_type = 'borrow'
+          GROUP BY b.book_title, ba.book_author, category
+          HAVING available_copies > 0 AND (rating_count >= 1 OR borrow_count >= 1)
+          ORDER BY 
+            average_rating DESC,
+            borrow_count DESC,
+            rating_count DESC
+          LIMIT ?`,
+          [parseInt(limit)]
+        );
+
+        recommendations = generalRecs;
+      }
       
       return {
         success: true,
         count: recommendations.length,
-        based_on_categories: preferredCategories,
-        recommendations: recommendations
+        recommendations: recommendations,
+        source: recommendations.length > 0 ? 
+          (user_id ? 'personalized' : 'general') : 'none'
       };
     } catch (error) {
-      console.error('Error generating recommendations:', error);
+      console.error('Error recommending books:', error);
+      return { success: false, error: error.message };
+    }
+  },
+
+  /**
+   * Recommend research papers based on user department and preferences
+   * Smart algorithm similar to book recommendations
+   */
+  recommend_research_papers: async ({ user_id, limit = 5 }) => {
+    try {
+      let recommendations = [];
+      
+      // STEP 1: Check user's department for relevant research
+      if (user_id) {
+        const [userInfo] = await pool.query(
+          `SELECT u.department_id, d.department_name
+           FROM users u
+           LEFT JOIN departments d ON u.department_id = d.department_id
+           WHERE u.user_id = ?`,
+          [user_id]
+        );
+
+        if (userInfo.length > 0 && userInfo[0].department_name) {
+          const userDept = userInfo[0].department_name;
+          console.log(`📄 Recommending research papers for department: ${userDept}`);
+
+          const [deptPapers] = await pool.query(
+            `SELECT 
+              rp.research_paper_id,
+              rp.research_title as title,
+              rp.research_abstract,
+              rp.year_publication,
+              rp.research_authors as authors,
+              d.department_name as category,
+              rp.availability_status as status
+            FROM research_papers rp
+            INNER JOIN departments d ON rp.department_id = d.department_id
+            WHERE d.department_name = ?
+            AND rp.availability_status = 'Available'
+            ORDER BY rp.year_publication DESC
+            LIMIT ?`,
+            [userDept, parseInt(limit)]
+          );
+
+          recommendations = deptPapers;
+        }
+      }
+
+      // STEP 2: If no department match, get recent/available papers
+      if (recommendations.length === 0) {
+        console.log('📄 Using general research paper recommendations...');
+        
+        const [generalPapers] = await pool.query(
+          `SELECT 
+            rp.research_paper_id,
+            rp.research_title as title,
+            rp.research_abstract,
+            rp.year_publication,
+            rp.research_authors as authors,
+            d.department_name as category,
+            rp.availability_status as status
+          FROM research_papers rp
+          LEFT JOIN departments d ON rp.department_id = d.department_id
+          WHERE rp.availability_status = 'Available'
+          ORDER BY rp.year_publication DESC
+          LIMIT ?`,
+          [parseInt(limit)]
+        );
+
+        recommendations = generalPapers;
+      }
+      
+      return {
+        success: true,
+        count: recommendations.length,
+        papers: recommendations,
+        source: user_id ? 'personalized' : 'general'
+      };
+    } catch (error) {
+      console.error('Error recommending research papers:', error);
       return { success: false, error: error.message };
     }
   },

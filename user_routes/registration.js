@@ -95,6 +95,19 @@ router.post("/register", upload.fields([
     // STORE SELECTED DEPARTMENT ID
     const departmentId = college;
 
+    // GET ACTIVE SEMESTER FOR AUTO-ASSIGNMENT
+    let activeSemesterId = null;
+    try {
+      const [activeSemester] = await pool.query(
+        `SELECT semester_id FROM semesters WHERE is_active = 1 LIMIT 1`
+      );
+      if (activeSemester.length > 0) {
+        activeSemesterId = activeSemester[0].semester_id;
+      }
+    } catch (semesterError) {
+      console.log("Note: No active semester found, user will be assigned later");
+    }
+
     // INSERT USER DATA INTO THE DATABASE
     const corImage = req.files?.corImage ? req.files.corImage[0].buffer : null;
     const profileImage = req.files?.profileImage ? req.files.profileImage[0].buffer : null;
@@ -105,8 +118,8 @@ router.post("/register", upload.fields([
     const hashedPassword = await bcrypt.hash(password, saltRounds);
 
     await pool.query(
-      `INSERT INTO users (first_name, middle_name, last_name, student_id, faculty_id, department_id, position, year_level, contact_number, cor, email, password, librarian_approval, email_verification, profile_photo, created_at) 
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO users (first_name, middle_name, last_name, student_id, faculty_id, department_id, position, year_level, contact_number, cor, email, password, librarian_approval, email_verification, profile_photo, semester_id, semester_verified, created_at) 
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         firstName,
         middleName || null,
@@ -123,6 +136,8 @@ router.post("/register", upload.fields([
         0, 
         0,
         profileImage,
+        activeSemesterId,
+        0, // semester_verified = false initially
         createdAt
       ]
     );
