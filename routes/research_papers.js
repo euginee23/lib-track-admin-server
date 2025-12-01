@@ -95,8 +95,9 @@ router.get('/', async (req, res) => {
         bs.shelf_number,
         bs.shelf_column,
         bs.shelf_row,
-        CONCAT(u.first_name, ' ', u.last_name) AS current_borrower,
-        t.transaction_date AS last_borrowed
+        CONCAT(u_current.first_name, ' ', u_current.last_name) AS current_borrower,
+        t_current.transaction_date AS current_borrow_date,
+        t_last.transaction_date AS last_borrowed
       FROM research_papers rp
       LEFT JOIN departments d ON rp.department_id = d.department_id
       LEFT JOIN research_author ra ON rp.research_paper_id = ra.research_paper_id
@@ -108,10 +109,17 @@ router.get('/', async (req, res) => {
           AND tr.return_date IS NULL
           AND tr.transaction_type = 'Borrow'
         ORDER BY tr.transaction_date DESC
-      ) t ON rp.research_paper_id = t.research_paper_id
-      LEFT JOIN users u ON t.user_id = u.user_id
+      ) t_current ON rp.research_paper_id = t_current.research_paper_id
+      LEFT JOIN users u_current ON t_current.user_id = u_current.user_id
+      LEFT JOIN (
+        SELECT research_paper_id, MAX(transaction_date) as transaction_date
+        FROM transactions
+        WHERE research_paper_id IS NOT NULL 
+          AND transaction_type = 'Borrow'
+        GROUP BY research_paper_id
+      ) t_last ON rp.research_paper_id = t_last.research_paper_id
       ${whereClause}
-      GROUP BY rp.research_paper_id, u.first_name, u.last_name, t.transaction_date
+      GROUP BY rp.research_paper_id, u_current.first_name, u_current.last_name, t_current.transaction_date, t_last.transaction_date
       ORDER BY rp.research_paper_id DESC
     `, queryParams);
 
@@ -201,8 +209,9 @@ router.get('/:id', async (req, res) => {
         bs.shelf_column,
         bs.shelf_row,
         rp.status,
-        CONCAT(u.first_name, ' ', u.last_name) AS current_borrower,
-        t.transaction_date AS last_borrowed
+        CONCAT(u_current.first_name, ' ', u_current.last_name) AS current_borrower,
+        t_current.transaction_date AS current_borrow_date,
+        t_last.transaction_date AS last_borrowed
       FROM research_papers rp
       LEFT JOIN departments d ON rp.department_id = d.department_id
       LEFT JOIN research_author ra ON rp.research_paper_id = ra.research_paper_id
@@ -214,10 +223,17 @@ router.get('/:id', async (req, res) => {
           AND tr.return_date IS NULL
           AND tr.transaction_type = 'Borrow'
         ORDER BY tr.transaction_date DESC
-      ) t ON rp.research_paper_id = t.research_paper_id
-      LEFT JOIN users u ON t.user_id = u.user_id
+      ) t_current ON rp.research_paper_id = t_current.research_paper_id
+      LEFT JOIN users u_current ON t_current.user_id = u_current.user_id
+      LEFT JOIN (
+        SELECT research_paper_id, MAX(transaction_date) as transaction_date
+        FROM transactions
+        WHERE research_paper_id IS NOT NULL 
+          AND transaction_type = 'Borrow'
+        GROUP BY research_paper_id
+      ) t_last ON rp.research_paper_id = t_last.research_paper_id
       WHERE rp.research_paper_id = ?
-      GROUP BY rp.research_paper_id, u.first_name, u.last_name, t.transaction_date
+      GROUP BY rp.research_paper_id, u_current.first_name, u_current.last_name, t_current.transaction_date, t_last.transaction_date
       LIMIT 1
     `, [req.params.id]);
 
