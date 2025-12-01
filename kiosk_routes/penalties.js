@@ -521,18 +521,13 @@ router.get("/summary", async (req, res) => {
          SUM(p.fine) as overdue_fines
        FROM penalties p
        LEFT JOIN transactions t ON p.transaction_id = t.transaction_id
-       WHERE (p.status != 'Paid' OR p.status IS NULL)
-         AND (
-           -- For returned transactions, only count if they were actually overdue at return time (positive days)
-           (t.status = 'Returned' AND t.return_date IS NOT NULL AND STR_TO_DATE(t.due_date, '%Y-%m-%d') < STR_TO_DATE(t.return_date, '%Y-%m-%d'))
-           OR
-           -- For active transactions, check if they are currently overdue  
-           (t.status != 'Returned' AND STR_TO_DATE(t.due_date, '%Y-%m-%d') < CURDATE())
-         )
+       WHERE (p.status != 'Paid' AND p.status != 'Waived' OR p.status IS NULL)
+         AND t.status != 'Returned'
+         AND STR_TO_DATE(t.due_date, '%Y-%m-%d') < CURDATE()
          AND p.penalty_id IN (
            SELECT MAX(p2.penalty_id) 
            FROM penalties p2 
-           WHERE (p2.status != 'Paid' OR p2.status IS NULL)
+           WHERE (p2.status != 'Paid' AND p2.status != 'Waived' OR p2.status IS NULL)
            GROUP BY p2.transaction_id, p2.user_id
          )`
     );
