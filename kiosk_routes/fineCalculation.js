@@ -287,24 +287,62 @@ router.get("/transaction/:transaction_id", async (req, res) => {
   try {
     const { transaction_id } = req.params;
 
-    // Get transaction details
+    // Get upload domain from environment
+    const UPLOAD_DOMAIN = (process.env.UPLOAD_DOMAIN || 'https://uploads.codehub.site').replace(/\/+$/, '');
+
+    // Get transaction details with complete book/research information
     const [transactions] = await pool.execute(
       `SELECT 
         t.*,
+        CASE 
+          WHEN t.receipt_image IS NOT NULL AND t.receipt_image != '' 
+          THEN CONCAT('${UPLOAD_DOMAIN}', t.receipt_image)
+          ELSE NULL 
+        END AS receipt_image,
         u.first_name,
         u.last_name,
         u.position,
         u.year_level,
+        u.student_id,
+        u.email,
         d.department_name,
         d.department_acronym,
         b.book_title,
-        rp.research_title
+        b.book_year,
+        b.book_edition,
+        b.book_price,
+        CASE 
+          WHEN bc.file_path IS NOT NULL AND bc.file_path != '' THEN CONCAT('${UPLOAD_DOMAIN}', bc.file_path)
+          ELSE NULL 
+        END AS book_cover,
+        ba.book_author as author,
+        bp.publisher,
+        CASE 
+          WHEN b.isUsingDepartment = 1 THEN bd.department_name 
+          ELSE bg.book_genre 
+        END as genre,
+        rp.research_title,
+        rp.year_publication,
+        rp.research_abstract as abstract,
+        rd.department_name as department,
+        ra.authors
       FROM transactions t
       LEFT JOIN users u ON t.user_id = u.user_id
       LEFT JOIN departments d ON u.department_id = d.department_id
       LEFT JOIN books b ON t.book_id = b.book_id
+      LEFT JOIN book_covers bc ON b.batch_registration_key = bc.batch_registration_key
+      LEFT JOIN book_author ba ON b.book_author_id = ba.book_author_id
+      LEFT JOIN book_publisher bp ON b.book_publisher_id = bp.book_publisher_id
+      LEFT JOIN book_genre bg ON b.book_genre_id = bg.book_genre_id AND b.isUsingDepartment = 0
+      LEFT JOIN departments bd ON b.book_genre_id = bd.department_id AND b.isUsingDepartment = 1
       LEFT JOIN research_papers rp ON t.research_paper_id = rp.research_paper_id
-      WHERE t.transaction_id = ? AND t.status != 'Returned'`,
+      LEFT JOIN departments rd ON rp.department_id = rd.department_id
+      LEFT JOIN (
+        SELECT research_paper_id, GROUP_CONCAT(author_name ORDER BY author_name SEPARATOR ', ') as authors
+        FROM research_author
+        GROUP BY research_paper_id
+      ) ra ON rp.research_paper_id = ra.research_paper_id
+      WHERE t.transaction_id = ?`,
       [transaction_id]
     );
 
