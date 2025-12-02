@@ -1123,10 +1123,14 @@ const toolImplementations = {
           `SELECT 
             rp.research_paper_id,
             rp.research_title as title,
-            GROUP_CONCAT(DISTINCT ra.author_name) as author,
+            GROUP_CONCAT(DISTINCT ra.author_name SEPARATOR ', ') as author,
             rp.year_publication as publication_year,
             d.department_name as category,
             rp.status,
+            CASE 
+              WHEN rp.status = 'Available' THEN 'Available'
+              ELSE 'Not Available'
+            END as availability_status,
             COALESCE(AVG(r.star_rating), 0) as average_rating,
             COUNT(DISTINCT r.rating_id) as rating_count
           FROM research_papers rp
@@ -1160,10 +1164,14 @@ const toolImplementations = {
           `SELECT 
             rp.research_paper_id,
             rp.research_title as title,
-            GROUP_CONCAT(DISTINCT ra.author_name) as author,
+            GROUP_CONCAT(DISTINCT ra.author_name SEPARATOR ', ') as author,
             rp.year_publication as publication_year,
             d.department_name as category,
             rp.status,
+            CASE 
+              WHEN rp.status = 'Available' THEN 'Available'
+              ELSE 'Not Available'
+            END as availability_status,
             COALESCE(AVG(r.star_rating), 0) as average_rating,
             COUNT(DISTINCT r.rating_id) as rating_count
           FROM research_papers rp
@@ -1197,10 +1205,11 @@ const toolImplementations = {
           `SELECT 
             rp.research_paper_id,
             rp.research_title as title,
-            GROUP_CONCAT(DISTINCT ra.author_name) as author,
+            GROUP_CONCAT(DISTINCT ra.author_name SEPARATOR ', ') as author,
             rp.year_publication as publication_year,
             d.department_name as category,
             rp.status,
+            CASE WHEN rp.status = 'Available' THEN 'Available' ELSE 'Not Available' END as availability_status,
             COALESCE(AVG(r.star_rating), 0) as average_rating,
             COUNT(DISTINCT r.rating_id) as rating_count
           FROM research_papers rp
