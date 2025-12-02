@@ -792,18 +792,43 @@ router.put("/:penalty_id/pay", async (req, res) => {
 
     const penalty = penaltyDetails[0];
 
+    // Check if penalty is already paid or waived
+    if (penalty.status === 'Paid') {
+      return res.status(400).json({
+        success: false,
+        message: "Penalty is already marked as paid",
+        data: {
+          penalty_id,
+          status: penalty.status,
+          fine_amount: penalty.fine
+        }
+      });
+    }
+
+    if (penalty.status === 'Waived') {
+      return res.status(400).json({
+        success: false,
+        message: "Penalty has been waived and cannot be marked as paid",
+        data: {
+          penalty_id,
+          status: penalty.status,
+          waive_reason: penalty.waive_reason
+        }
+      });
+    }
+
     // Mark penalty as paid by updating its status (preserve fine amount for audit)
     const [result] = await pool.execute(
       `UPDATE penalties 
        SET status = 'Paid', updated_at = NOW()
-       WHERE penalty_id = ?`,
+       WHERE penalty_id = ? AND status != 'Paid' AND status != 'Waived'`,
       [penalty_id]
     );
 
     if (result.affectedRows === 0) {
       return res.status(404).json({
         success: false,
-        message: "Penalty not found",
+        message: "Penalty not found or already processed",
       });
     }
 
