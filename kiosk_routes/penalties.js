@@ -203,8 +203,7 @@ router.get("/", async (req, res) => {
          FROM transactions t
          LEFT JOIN users u ON t.user_id = u.user_id
          LEFT JOIN penalties p ON t.transaction_id = p.transaction_id 
-                              AND t.user_id = p.user_id 
-                              AND p.status NOT IN ('Paid', 'Waived')
+                              AND t.user_id = p.user_id
          WHERE t.status != 'Returned'
            AND t.transaction_type = 'borrow'
            AND t.due_date IS NOT NULL
@@ -320,7 +319,7 @@ router.get("/", async (req, res) => {
           WHEN t.status = 'Returned' AND t.return_date IS NOT NULL THEN DATEDIFF(STR_TO_DATE(t.return_date, '%Y-%m-%d'), STR_TO_DATE(t.due_date, '%Y-%m-%d'))
           ELSE DATEDIFF(CURDATE(), STR_TO_DATE(t.due_date, '%Y-%m-%d'))
         END as days_overdue,
-        COALESCE(p.status, CASE WHEN p.fine > 0 THEN 'Pending Payment' ELSE 'Paid' END) as status
+        p.status
       FROM penalties p
       LEFT JOIN transactions t ON p.transaction_id = t.transaction_id
       LEFT JOIN users u ON p.user_id = u.user_id
@@ -366,7 +365,7 @@ router.get("/", async (req, res) => {
       ...penalty,
       item_title:
         penalty.book_title || penalty.research_title || "Unknown Item",
-      status: penalty.status || (penalty.fine > 0 ? "Pending Payment" : "Paid")
+      status: penalty.status !== null && penalty.status !== undefined ? penalty.status : (penalty.fine > 0 ? "Pending Payment" : "Paid")
     }));
 
     res.status(200).json({
@@ -535,7 +534,7 @@ router.get("/user/:user_id", async (req, res) => {
             WHEN t.status = 'Returned' AND t.return_date IS NOT NULL THEN DATEDIFF(STR_TO_DATE(t.return_date, '%Y-%m-%d'), STR_TO_DATE(t.due_date, '%Y-%m-%d'))
             ELSE DATEDIFF(CURDATE(), STR_TO_DATE(t.due_date, '%Y-%m-%d'))
           END as days_overdue,
-          COALESCE(p.status, CASE WHEN p.fine > 0 THEN 'Pending Payment' ELSE 'Paid' END) as status
+          p.status
         FROM penalties p
         LEFT JOIN transactions t ON p.transaction_id = t.transaction_id
         LEFT JOIN users u ON p.user_id = u.user_id
@@ -566,7 +565,7 @@ router.get("/user/:user_id", async (req, res) => {
     const formattedPenalties = penalties.map((p) => ({
       ...p,
       item_title: p.book_title || p.research_title || "Unknown Item",
-      status: p.status || (p.fine > 0 ? "Pending Payment" : "Paid")
+      status: p.status !== null && p.status !== undefined ? p.status : (p.fine > 0 ? "Pending Payment" : "Paid")
     }));
 
     res.status(200).json({
@@ -607,8 +606,7 @@ router.get("/summary", async (req, res) => {
          FROM transactions t
          LEFT JOIN users u ON t.user_id = u.user_id
          LEFT JOIN penalties p ON t.transaction_id = p.transaction_id 
-                              AND t.user_id = p.user_id 
-                              AND p.status NOT IN ('Paid', 'Waived')
+                              AND t.user_id = p.user_id
          WHERE t.status != 'Returned'
            AND t.transaction_type = 'borrow'
            AND t.due_date IS NOT NULL
@@ -1245,6 +1243,122 @@ router.post("/mark-as-lost", async (req, res) => {
       success: false,
       message: "Failed to mark transactions as lost",
       error: error.message
+    });
+  }
+});
+
+// SEND MANUAL REMINDER FOR PENALTY
+router.post("/:penalty_id/remind", async (req, res) => {
+  try {
+    const { penalty_id } = req.params;
+    const { sendManualPenaltyReminder } = require("../smtp/penaltyNotification");
+
+    // GET PENALTY DETAILS
+    const [penaltyDetails] = await pool.execute(
+      `SELECT 
+        p.*,
+        t.reference_number,
+        t.due_date,
+        DATEDIFF(CURDATE(), STR_TO_DATE(t.due_date, '%Y-%m-%d')) as days_overdue,
+        CONCAT(u.first_name, ' ', u.last_name) as user_name,
+        u.email,
+        u.user_id,
+        b.book_title,
+        rp.research_title
+       FROM penalties p
+       LEFT JOIN transactions t ON p.transaction_id = t.transaction_id
+       LEFT JOIN users u ON p.user_id = u.user_id
+       LEFT JOIN books b ON t.book_id = b.book_id
+       LEFT JOIN research_papers rp ON t.research_paper_id = rp.research_paper_id
+       WHERE p.penalty_id = ?`,
+      [penalty_id]
+    );
+
+    if (penaltyDetails.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: "Penalty not found",
+      });
+    }
+
+    const penalty = penaltyDetails[0];
+
+    if (!penalty.email) {
+      return res.status(400).json({
+        success: false,
+        message: "User email not found",
+      });
+    }
+
+    console.log(`[Send Reminder] Sending reminder for penalty ${penalty_id} to ${penalty.email}`);
+    console.log(`[Send Reminder] Penalty details:`, {
+      user_name: penalty.user_name,
+      email: penalty.email,
+      fine: penalty.fine,
+      reference_number: penalty.reference_number,
+      days_overdue: penalty.days_overdue
+    });
+
+    // Send email reminder
+    let emailSent = false;
+    let emailError = null;
+    try {
+      await sendManualPenaltyReminder(
+        penalty.email,
+        penalty.user_name,
+        penalty
+      );
+      emailSent = true;
+      console.log(`[Send Reminder] Email sent successfully to ${penalty.email}`);
+    } catch (err) {
+      emailError = err.message;
+      console.error("[Send Reminder] Error sending email reminder:", err);
+      // Return error instead of continuing
+      return res.status(500).json({
+        success: false,
+        message: "Failed to send email reminder",
+        error: emailError,
+        details: {
+          email: penalty.email,
+          user_name: penalty.user_name
+        }
+      });
+    }
+
+    // Send WebSocket notification to user frontend
+    if (wsServer && wsServer.io) {
+      wsServer.io.emit('user_notification', {
+        user_id: penalty.user_id,
+        type: 'payment_reminder',
+        title: 'Payment Reminder',
+        message: `Reminder: Please settle your outstanding fine of ₱${parseFloat(penalty.fine).toFixed(2)} for "${penalty.book_title || penalty.research_title}" (Ref: ${penalty.reference_number}) at the library counter.`,
+        reference_number: penalty.reference_number,
+        fine_amount: penalty.fine,
+        days_overdue: penalty.days_overdue,
+        timestamp: new Date().toISOString(),
+        priority: 'medium'
+      });
+      console.log(`[Send Reminder] WebSocket notification sent to user ${penalty.user_id}`);
+    }
+
+    res.status(200).json({
+      success: true,
+      message: `Reminder sent successfully to ${penalty.user_name}`,
+      data: {
+        penalty_id,
+        user_name: penalty.user_name,
+        email: penalty.email,
+        fine_amount: penalty.fine,
+        email_sent: emailSent
+      }
+    });
+
+  } catch (error) {
+    console.error("Error sending reminder:", error);
+    res.status(500).json({
+      success: false,
+      message: "Failed to send reminder",
+      error: error.message,
     });
   }
 });

@@ -258,10 +258,21 @@ router.get("/notifications", async (req, res) => {
 // GET WAIVED TRANSACTIONS
 router.get("/waived", async (req, res) => {
   try {
+    console.log('[Waived Transactions] Fetching waived penalties...');
+    
     // GET WAIVED TRANSACTIONS WITH PENALTY DETAILS
     const [transactions] = await pool.execute(
       `SELECT 
-        t.*,
+        t.transaction_id,
+        t.reference_number,
+        t.user_id,
+        t.book_id,
+        t.research_paper_id,
+        t.transaction_date,
+        t.due_date,
+        t.return_date,
+        t.transaction_type,
+        t.status,
         CASE 
           WHEN t.receipt_image IS NOT NULL AND t.receipt_image != '' 
           THEN CONCAT('${UPLOAD_DOMAIN}', t.receipt_image)
@@ -292,8 +303,18 @@ router.get("/waived", async (req, res) => {
         p.fine as waived_fine,
         p.waive_reason,
         p.waived_by,
+        p.status as penalty_status,
         p.updated_at as waived_date,
-        DATEDIFF(COALESCE(t.return_date, CURDATE()), STR_TO_DATE(t.due_date, '%Y-%m-%d')) as days_overdue_when_waived
+        COALESCE(
+          CASE 
+            WHEN t.return_date IS NOT NULL AND t.due_date IS NOT NULL
+            THEN DATEDIFF(DATE(t.return_date), DATE(t.due_date))
+            WHEN t.due_date IS NOT NULL
+            THEN DATEDIFF(CURDATE(), DATE(t.due_date))
+            ELSE 0
+          END,
+          0
+        ) as days_overdue_when_waived
       FROM penalties p
       INNER JOIN transactions t ON p.transaction_id = t.transaction_id AND p.user_id = t.user_id
       LEFT JOIN users u ON t.user_id = u.user_id
@@ -308,6 +329,22 @@ router.get("/waived", async (req, res) => {
       ORDER BY p.updated_at DESC`
     );
 
+    console.log(`[Waived Transactions] Found ${transactions.length} waived penalties`);
+    
+    // Debug log first transaction if any
+    if (transactions.length > 0) {
+      console.log('[Waived Transactions] Sample data:', {
+        transaction_id: transactions[0].transaction_id,
+        reference_number: transactions[0].reference_number,
+        penalty_id: transactions[0].penalty_id,
+        waived_fine: transactions[0].waived_fine,
+        penalty_status: transactions[0].penalty_status,
+        waive_reason: transactions[0].waive_reason,
+        waived_by: transactions[0].waived_by,
+        days_overdue: transactions[0].days_overdue_when_waived
+      });
+    }
+
     res.status(200).json({
       success: true,
       count: transactions.length,
@@ -315,11 +352,13 @@ router.get("/waived", async (req, res) => {
     });
 
   } catch (error) {
-    console.error("Error fetching waived transactions:", error);
+    console.error("[Waived Transactions] Error details:", error);
+    console.error("[Waived Transactions] Error stack:", error.stack);
     res.status(500).json({
       success: false,
       message: "Failed to fetch waived transactions",
-      error: error.message
+      error: error.message,
+      details: error.toString()
     });
   }
 });
@@ -625,6 +664,103 @@ router.get("/stats/fines/:user_id", async (req, res) => {
     res.status(500).json({
       success: false,
       message: "Failed to fetch user fine statistics",
+      error: error.message
+    });
+  }
+});
+
+// SEND REMINDER EMAIL FOR OVERDUE/DUE TRANSACTIONS
+router.post("/send-reminder", async (req, res) => {
+  try {
+    const { transaction_ids } = req.body;
+
+    if (!transaction_ids || !Array.isArray(transaction_ids) || transaction_ids.length === 0) {
+      return res.status(400).json({
+        success: false,
+        message: "transaction_ids array is required"
+      });
+    }
+
+    const { sendPenaltyDueReminder } = require("../smtp/penaltyNotification");
+    
+    let successCount = 0;
+    let failedCount = 0;
+    const errors = [];
+
+    for (const transaction_id of transaction_ids) {
+      try {
+        // Get transaction details with user info
+        const [transactions] = await pool.execute(
+          `SELECT 
+            t.*,
+            CONCAT(u.first_name, ' ', u.last_name) as user_name,
+            u.email,
+            b.book_title,
+            rp.research_title
+          FROM transactions t
+          LEFT JOIN users u ON t.user_id = u.user_id
+          LEFT JOIN books b ON t.book_id = b.book_id
+          LEFT JOIN research_papers rp ON t.research_paper_id = rp.research_paper_id
+          WHERE t.transaction_id = ?`,
+          [transaction_id]
+        );
+
+        if (transactions.length === 0) {
+          errors.push({
+            transaction_id,
+            error: "Transaction not found"
+          });
+          failedCount++;
+          continue;
+        }
+
+        const transaction = transactions[0];
+
+        if (!transaction.email) {
+          errors.push({
+            transaction_id,
+            error: "User email not found"
+          });
+          failedCount++;
+          continue;
+        }
+
+        // Send email reminder
+        await sendPenaltyDueReminder(
+          transaction.email,
+          transaction.user_name,
+          transaction
+        );
+
+        successCount++;
+        console.log(`[Send Reminder] Email sent to ${transaction.email} for transaction ${transaction.reference_number}`);
+
+      } catch (error) {
+        console.error(`[Send Reminder] Error processing transaction ${transaction_id}:`, error);
+        errors.push({
+          transaction_id,
+          error: error.message
+        });
+        failedCount++;
+      }
+    }
+
+    res.status(200).json({
+      success: true,
+      message: `Reminder emails sent: ${successCount} successful, ${failedCount} failed`,
+      data: {
+        total: transaction_ids.length,
+        successful: successCount,
+        failed: failedCount,
+        errors: errors.length > 0 ? errors : undefined
+      }
+    });
+
+  } catch (error) {
+    console.error("Error sending reminder emails:", error);
+    res.status(500).json({
+      success: false,
+      message: "Failed to send reminder emails",
       error: error.message
     });
   }

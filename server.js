@@ -233,6 +233,11 @@ if (botRoutes && typeof botRoutes.setWebSocketServer === 'function') {
   botRoutes.setWebSocketServer(wsServer);
 }
 
+// INITIALIZE PENALTY NOTIFICATION SCHEDULER
+const penaltyScheduler = require('./services/penaltyScheduler');
+penaltyScheduler.setWebSocketServer(wsServer);
+penaltyScheduler.startPenaltyScheduler();
+
 wsServer.broadcast({ 
   type: 'SERVER_STARTED',
   message: "Library Tracker Server Started",
