@@ -1188,31 +1188,46 @@ router.post("/mark-as-lost", async (req, res) => {
           totalFine
         );
 
-        if (result.created || result.updated) {
-          updated++;
-          
-          // Update book status to "Lost" if it's a book transaction
-          if (transaction.book_id) {
-            await pool.execute(
-              `UPDATE books SET status = 'Lost' WHERE book_id = ?`,
-              [transaction.book_id]
-            );
-          }
+        // Always mark as lost/damaged, even if penalty already exists or was paid
+        updated++;
+        
+        // Update penalty to mark it as a Lost/Damaged penalty (if penalty exists)
+        if (result.penalty_id) {
+          await pool.execute(
+            `UPDATE penalties 
+             SET waive_reason = ?, updated_at = NOW() 
+             WHERE penalty_id = ?`,
+            [`Lost/Damaged - Book replacement fee: ₱${bookPrice.toFixed(2)}${overdueFine > 0 ? `, Overdue fine: ₱${overdueFine.toFixed(2)}` : ''}`, result.penalty_id]
+          );
+        }
+        
+        // Update transaction status to "Lost"
+        await pool.execute(
+          `UPDATE transactions SET status = 'Lost' WHERE transaction_id = ?`,
+          [transaction.transaction_id]
+        );
+        
+        // Update book status to "Lost" if it's a book transaction
+        if (transaction.book_id) {
+          await pool.execute(
+            `UPDATE books SET status = 'Lost' WHERE book_id = ?`,
+            [transaction.book_id]
+          );
+        }
 
-          // Send notification to user via WebSocket
-          if (wsServer && wsServer.io) {
-            wsServer.io.emit('user_notification', {
-              user_id: transaction.user_id,
-              type: 'lost_book',
-              title: 'Book Marked as Lost',
-              message: `A book you borrowed has been marked as lost. Book replacement fee (₱${bookPrice.toFixed(2)}) has been added to your account.${overdueFine > 0 ? ` Plus overdue fine: ₱${overdueFine.toFixed(2)}.` : ''} Total fine: ₱${totalFine.toFixed(2)}`,
-              fine_amount: totalFine,
-              book_price: bookPrice,
-              overdue_fine: overdueFine,
-              timestamp: new Date().toISOString(),
-              priority: 'high'
-            });
-          }
+        // Send notification to user via WebSocket
+        if (wsServer && wsServer.io) {
+          wsServer.io.emit('user_notification', {
+            user_id: transaction.user_id,
+            type: 'lost_book',
+            title: 'Book Marked as Lost',
+            message: `A book you borrowed has been marked as lost. Book replacement fee (₱${bookPrice.toFixed(2)}) has been added to your account.${overdueFine > 0 ? ` Plus overdue fine: ₱${overdueFine.toFixed(2)}.` : ''} Total fine: ₱${totalFine.toFixed(2)}`,
+            fine_amount: totalFine,
+            book_price: bookPrice,
+            overdue_fine: overdueFine,
+            timestamp: new Date().toISOString(),
+            priority: 'high'
+          });
         }
 
         processed++;

@@ -54,7 +54,9 @@ router.get("/", async (req, res) => {
         END as book_genre,
         rp.research_title,
         rp.research_abstract,
-        rd.department_name as research_department
+        rd.department_name as research_department,
+        p.status as penalty_status,
+        p.fine as penalty_fine
       FROM transactions t
       LEFT JOIN users u ON t.user_id = u.user_id
       LEFT JOIN departments d ON u.department_id = d.department_id
@@ -64,6 +66,17 @@ router.get("/", async (req, res) => {
       LEFT JOIN departments bd ON b.book_genre_id = bd.department_id AND b.isUsingDepartment = 1
       LEFT JOIN research_papers rp ON t.research_paper_id = rp.research_paper_id
       LEFT JOIN departments rd ON rp.department_id = rd.department_id
+      LEFT JOIN (
+        SELECT p1.transaction_id, p1.user_id, p1.status, p1.fine
+        FROM penalties p1
+        INNER JOIN (
+          SELECT transaction_id, user_id, MAX(penalty_id) as max_penalty_id
+          FROM penalties
+          GROUP BY transaction_id, user_id
+        ) p2 ON p1.transaction_id = p2.transaction_id 
+            AND p1.user_id = p2.user_id 
+            AND p1.penalty_id = p2.max_penalty_id
+      ) p ON t.transaction_id = p.transaction_id AND t.user_id = p.user_id
       ${whereClause}
       ORDER BY t.transaction_date DESC`,
       queryParams
