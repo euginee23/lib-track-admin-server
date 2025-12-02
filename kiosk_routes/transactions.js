@@ -173,7 +173,7 @@ router.get("/history", async (req, res) => {
 // GET OVERDUE/DUE NOTIFICATIONS
 router.get("/notifications", async (req, res) => {
   try {
-    // GET OVERDUE AND DUE ITEMS
+    // GET OVERDUE AND DUE ITEMS (excluding waived penalties)
     const [transactions] = await pool.execute(
       `SELECT 
         t.*,
@@ -209,7 +209,8 @@ router.get("/notifications", async (req, res) => {
           WHEN DATEDIFF(STR_TO_DATE(t.due_date, '%Y-%m-%d'), CURDATE()) = 0 THEN 'due_today'
           WHEN DATEDIFF(STR_TO_DATE(t.due_date, '%Y-%m-%d'), CURDATE()) = 1 THEN 'due_tomorrow'
           ELSE 'normal'
-        END as notification_type
+        END as notification_type,
+        p.status as penalty_status
       FROM transactions t
       LEFT JOIN users u ON t.user_id = u.user_id
       LEFT JOIN departments d ON u.department_id = d.department_id
@@ -219,10 +220,22 @@ router.get("/notifications", async (req, res) => {
       LEFT JOIN departments bd ON b.book_genre_id = bd.department_id AND b.isUsingDepartment = 1
       LEFT JOIN research_papers rp ON t.research_paper_id = rp.research_paper_id
       LEFT JOIN departments rd ON rp.department_id = rd.department_id
+      LEFT JOIN (
+        SELECT p1.transaction_id, p1.user_id, p1.status
+        FROM penalties p1
+        INNER JOIN (
+          SELECT transaction_id, user_id, MAX(penalty_id) as max_penalty_id
+          FROM penalties
+          GROUP BY transaction_id, user_id
+        ) p2 ON p1.transaction_id = p2.transaction_id 
+            AND p1.user_id = p2.user_id 
+            AND p1.penalty_id = p2.max_penalty_id
+      ) p ON t.transaction_id = p.transaction_id AND t.user_id = p.user_id
       WHERE t.transaction_type = 'borrow' 
         AND t.due_date IS NOT NULL
         AND t.status != 'Returned'
         AND DATEDIFF(STR_TO_DATE(t.due_date, '%Y-%m-%d'), CURDATE()) <= 1
+        AND (p.status IS NULL OR p.status != 'Waived')
       ORDER BY days_remaining ASC, t.transaction_date DESC`
     );
 
@@ -237,6 +250,75 @@ router.get("/notifications", async (req, res) => {
     res.status(500).json({
       success: false,
       message: "Failed to fetch notifications",
+      error: error.message
+    });
+  }
+});
+
+// GET WAIVED TRANSACTIONS
+router.get("/waived", async (req, res) => {
+  try {
+    // GET WAIVED TRANSACTIONS WITH PENALTY DETAILS
+    const [transactions] = await pool.execute(
+      `SELECT 
+        t.*,
+        CASE 
+          WHEN t.receipt_image IS NOT NULL AND t.receipt_image != '' 
+          THEN CONCAT('${UPLOAD_DOMAIN}', t.receipt_image)
+          ELSE NULL 
+        END AS receipt_image,
+        u.first_name,
+        u.last_name,
+        u.email,
+        u.student_id,
+        u.year_level,
+        u.position,
+        d.department_name,
+        d.department_acronym,
+        b.book_title,
+        CASE 
+          WHEN bc.file_path IS NOT NULL AND bc.file_path != '' THEN CONCAT('${UPLOAD_DOMAIN}', bc.file_path)
+          ELSE NULL 
+        END AS book_cover,
+        b.book_number,
+        b.isUsingDepartment,
+        CASE 
+          WHEN b.isUsingDepartment = 1 THEN bd.department_name 
+          ELSE bg.book_genre 
+        END as book_genre,
+        rp.research_title,
+        rd.department_name as research_department,
+        p.penalty_id,
+        p.fine as waived_fine,
+        p.waive_reason,
+        p.waived_by,
+        p.updated_at as waived_date,
+        DATEDIFF(COALESCE(t.return_date, CURDATE()), STR_TO_DATE(t.due_date, '%Y-%m-%d')) as days_overdue_when_waived
+      FROM penalties p
+      INNER JOIN transactions t ON p.transaction_id = t.transaction_id AND p.user_id = t.user_id
+      LEFT JOIN users u ON t.user_id = u.user_id
+      LEFT JOIN departments d ON u.department_id = d.department_id
+      LEFT JOIN books b ON t.book_id = b.book_id
+      LEFT JOIN book_covers bc ON b.batch_registration_key = bc.batch_registration_key
+      LEFT JOIN book_genre bg ON b.book_genre_id = bg.book_genre_id AND b.isUsingDepartment = 0
+      LEFT JOIN departments bd ON b.book_genre_id = bd.department_id AND b.isUsingDepartment = 1
+      LEFT JOIN research_papers rp ON t.research_paper_id = rp.research_paper_id
+      LEFT JOIN departments rd ON rp.department_id = rd.department_id
+      WHERE p.status = 'Waived'
+      ORDER BY p.updated_at DESC`
+    );
+
+    res.status(200).json({
+      success: true,
+      count: transactions.length,
+      data: transactions
+    });
+
+  } catch (error) {
+    console.error("Error fetching waived transactions:", error);
+    res.status(500).json({
+      success: false,
+      message: "Failed to fetch waived transactions",
       error: error.message
     });
   }

@@ -189,6 +189,100 @@ router.get("/", async (req, res) => {
   try {
     const { status, user_id, transaction_id } = req.query;
 
+    // FIRST: Auto-create penalty records for overdue transactions that don't have one yet
+    // Use the SAME logic as /api/transactions/notifications - check due_date
+    try {
+      const [overdueTransactions] = await pool.execute(
+        `SELECT 
+          t.transaction_id,
+          t.user_id,
+          t.due_date,
+          t.status as transaction_status,
+          u.position,
+          DATEDIFF(CURDATE(), STR_TO_DATE(t.due_date, '%Y-%m-%d')) as days_overdue
+         FROM transactions t
+         LEFT JOIN users u ON t.user_id = u.user_id
+         LEFT JOIN penalties p ON t.transaction_id = p.transaction_id 
+                              AND t.user_id = p.user_id 
+                              AND p.status NOT IN ('Paid', 'Waived')
+         WHERE t.status != 'Returned'
+           AND t.transaction_type = 'borrow'
+           AND t.due_date IS NOT NULL
+           AND DATEDIFF(STR_TO_DATE(t.due_date, '%Y-%m-%d'), CURDATE()) < 0
+           AND p.penalty_id IS NULL`
+      );
+
+      if (overdueTransactions.length > 0) {
+        console.log(`Found ${overdueTransactions.length} overdue transactions without penalty records. Creating...`);
+        
+        // Get system settings for fine calculation
+        const [settings] = await pool.execute(
+          `SELECT student_daily_fine, faculty_daily_fine FROM system_settings LIMIT 1`
+        );
+        const systemSettings = settings[0] || { student_daily_fine: 5, faculty_daily_fine: 11 };
+
+        for (const tx of overdueTransactions) {
+          const isStudent = !tx.position || tx.position === 'Student';
+          const dailyFine = isStudent ? systemSettings.student_daily_fine : systemSettings.faculty_daily_fine;
+          const totalFine = tx.days_overdue * dailyFine;
+
+          // Create penalty record
+          await pool.execute(
+            `INSERT INTO penalties (transaction_id, user_id, fine, updated_at)
+             VALUES (?, ?, ?, NOW())`,
+            [tx.transaction_id, tx.user_id, totalFine]
+          );
+          
+          console.log(`Auto-created penalty for transaction ${tx.transaction_id}: ₱${totalFine} (${tx.days_overdue} days)`);
+        }
+      }
+
+      // SECOND: Update existing unpaid penalty amounts if days have increased
+      const [existingPenalties] = await pool.execute(
+        `SELECT 
+          p.penalty_id,
+          p.transaction_id,
+          p.user_id,
+          p.fine as current_fine,
+          t.due_date,
+          u.position,
+          DATEDIFF(CURDATE(), STR_TO_DATE(t.due_date, '%Y-%m-%d')) as days_overdue
+         FROM penalties p
+         INNER JOIN transactions t ON p.transaction_id = t.transaction_id
+         LEFT JOIN users u ON p.user_id = u.user_id
+         WHERE p.status NOT IN ('Paid', 'Waived')
+           AND t.status != 'Returned'
+           AND t.transaction_type = 'borrow'
+           AND t.due_date IS NOT NULL
+           AND STR_TO_DATE(t.due_date, '%Y-%m-%d') < CURDATE()`
+      );
+
+      if (existingPenalties.length > 0) {
+        const [settings] = await pool.execute(
+          `SELECT student_daily_fine, faculty_daily_fine FROM system_settings LIMIT 1`
+        );
+        const systemSettings = settings[0] || { student_daily_fine: 5, faculty_daily_fine: 11 };
+
+        for (const penalty of existingPenalties) {
+          const isStudent = !penalty.position || penalty.position === 'Student';
+          const dailyFine = isStudent ? systemSettings.student_daily_fine : systemSettings.faculty_daily_fine;
+          const correctFine = penalty.days_overdue * dailyFine;
+
+          // Only update if the calculated fine is different (and higher to account for increasing days)
+          if (correctFine > penalty.current_fine) {
+            await pool.execute(
+              `UPDATE penalties SET fine = ?, updated_at = NOW() WHERE penalty_id = ?`,
+              [correctFine, penalty.penalty_id]
+            );
+            console.log(`Updated penalty ${penalty.penalty_id}: ₱${penalty.current_fine} -> ₱${correctFine}`);
+          }
+        }
+      }
+    } catch (autoCreateError) {
+      console.error('Error auto-creating/updating penalties:', autoCreateError);
+      // Continue even if auto-creation fails
+    }
+
     let whereClause = "WHERE 1=1";
     let params = [];
 
@@ -499,6 +593,101 @@ router.get("/user/:user_id", async (req, res) => {
 // GET PENALTY SUMMARY STATISTICS
 router.get("/summary", async (req, res) => {
   try {
+    // FIRST: Auto-create penalty records for overdue transactions that don't have one yet
+    // Use the SAME logic as /api/transactions/notifications
+    try {
+      const [overdueTransactions] = await pool.execute(
+        `SELECT 
+          t.transaction_id,
+          t.user_id,
+          t.due_date,
+          t.status as transaction_status,
+          u.position,
+          DATEDIFF(CURDATE(), STR_TO_DATE(t.due_date, '%Y-%m-%d')) as days_overdue
+         FROM transactions t
+         LEFT JOIN users u ON t.user_id = u.user_id
+         LEFT JOIN penalties p ON t.transaction_id = p.transaction_id 
+                              AND t.user_id = p.user_id 
+                              AND p.status NOT IN ('Paid', 'Waived')
+         WHERE t.status != 'Returned'
+           AND t.transaction_type = 'borrow'
+           AND t.due_date IS NOT NULL
+           AND DATEDIFF(STR_TO_DATE(t.due_date, '%Y-%m-%d'), CURDATE()) < 0
+           AND p.penalty_id IS NULL`
+      );
+
+      if (overdueTransactions.length > 0) {
+        console.log(`[Summary] Found ${overdueTransactions.length} overdue transactions without penalty records. Creating...`);
+        
+        // Get system settings for fine calculation
+        const [settings] = await pool.execute(
+          `SELECT student_daily_fine, faculty_daily_fine FROM system_settings LIMIT 1`
+        );
+        const systemSettings = settings[0] || { student_daily_fine: 5, faculty_daily_fine: 11 };
+
+        for (const tx of overdueTransactions) {
+          const isStudent = !tx.position || tx.position === 'Student';
+          const dailyFine = isStudent ? systemSettings.student_daily_fine : systemSettings.faculty_daily_fine;
+          const totalFine = tx.days_overdue * dailyFine;
+
+          // Create penalty record
+          await pool.execute(
+            `INSERT INTO penalties (transaction_id, user_id, fine, updated_at)
+             VALUES (?, ?, ?, NOW())`,
+            [tx.transaction_id, tx.user_id, totalFine]
+          );
+          
+          console.log(`[Summary] Auto-created penalty for transaction ${tx.transaction_id}: ₱${totalFine} (${tx.days_overdue} days)`);
+        }
+      }
+
+      // SECOND: Update existing unpaid penalty amounts if days have increased
+      // Use the SAME logic - check due_date for overdue status
+      const [existingPenalties] = await pool.execute(
+        `SELECT 
+          p.penalty_id,
+          p.transaction_id,
+          p.user_id,
+          p.fine as current_fine,
+          t.due_date,
+          u.position,
+          DATEDIFF(CURDATE(), STR_TO_DATE(t.due_date, '%Y-%m-%d')) as days_overdue
+         FROM penalties p
+         INNER JOIN transactions t ON p.transaction_id = t.transaction_id
+         LEFT JOIN users u ON p.user_id = u.user_id
+         WHERE p.status NOT IN ('Paid', 'Waived')
+           AND t.status != 'Returned'
+           AND t.transaction_type = 'borrow'
+           AND t.due_date IS NOT NULL
+           AND DATEDIFF(STR_TO_DATE(t.due_date, '%Y-%m-%d'), CURDATE()) < 0`
+      );
+
+      if (existingPenalties.length > 0) {
+        const [settings] = await pool.execute(
+          `SELECT student_daily_fine, faculty_daily_fine FROM system_settings LIMIT 1`
+        );
+        const systemSettings = settings[0] || { student_daily_fine: 5, faculty_daily_fine: 11 };
+
+        for (const penalty of existingPenalties) {
+          const isStudent = !penalty.position || penalty.position === 'Student';
+          const dailyFine = isStudent ? systemSettings.student_daily_fine : systemSettings.faculty_daily_fine;
+          const correctFine = penalty.days_overdue * dailyFine;
+
+          // Only update if the calculated fine is different (and higher to account for increasing days)
+          if (correctFine > penalty.current_fine) {
+            await pool.execute(
+              `UPDATE penalties SET fine = ?, updated_at = NOW() WHERE penalty_id = ?`,
+              [correctFine, penalty.penalty_id]
+            );
+            console.log(`[Summary] Updated penalty ${penalty.penalty_id}: ₱${penalty.current_fine} -> ₱${correctFine}`);
+          }
+        }
+      }
+    } catch (autoCreateError) {
+      console.error('[Summary] Error auto-creating/updating penalties:', autoCreateError);
+      // Continue even if auto-creation fails
+    }
+
     // Get total active penalties (latest unpaid penalty per transaction/user)
     const [totalResult] = await pool.execute(
       `SELECT 
@@ -515,6 +704,7 @@ router.get("/summary", async (req, res) => {
     );
 
     // Get overdue penalties (latest unpaid penalties that are overdue)
+    // Use DATEDIFF to match Book Transactions logic
     const [overdueResult] = await pool.execute(
       `SELECT 
          COUNT(*) as overdue_count, 
@@ -523,7 +713,7 @@ router.get("/summary", async (req, res) => {
        LEFT JOIN transactions t ON p.transaction_id = t.transaction_id
        WHERE (p.status != 'Paid' AND p.status != 'Waived' OR p.status IS NULL)
          AND t.status != 'Returned'
-         AND STR_TO_DATE(t.due_date, '%Y-%m-%d') < CURDATE()
+         AND DATEDIFF(STR_TO_DATE(t.due_date, '%Y-%m-%d'), CURDATE()) < 0
          AND p.penalty_id IN (
            SELECT MAX(p2.penalty_id) 
            FROM penalties p2 
