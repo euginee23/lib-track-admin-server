@@ -1,14 +1,19 @@
 const express = require('express');
 const router = express.Router();
-const aiRouter = require('../services/aiRouter');
-const ollamaService = require('../services/ollamaService');
-const { executeTool } = require('../services/chatbotTools');
-const axios = require('axios');
+const ruleBasedChatbot = require('../services/ruleBasedChatbot');
 
 /**
  * Chatbot API Routes
- * Endpoints for AI-powered chatbot functionality using Ollama
+ * Rule-based chatbot functionality with pattern matching and database lookups
  */
+
+// Session storage (in-memory for now)
+const sessions = new Map();
+
+// Generate session ID
+function generateSessionId(userId = 'anonymous') {
+  return `session_${userId}_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+}
 
 /**
  * POST /api/chatbot/chat
@@ -26,7 +31,7 @@ router.post('/chat', async (req, res) => {
     }
 
     // Generate or use provided session ID
-    const currentSessionId = sessionId || aiRouter.generateSessionId(userId || 'anonymous');
+    const currentSessionId = sessionId || generateSessionId(userId || 'anonymous');
 
     // Build context
     const context = {
@@ -34,57 +39,34 @@ router.post('/chat', async (req, res) => {
       userName: userName || 'User',
       userRole: userRole || 'student'
     };
-    // If Ollama is not available, provide a lightweight fallback
-    if (!ollamaService.available) {
-      const text = (message || '').toLowerCase();
-      // Quick hard-coded help for common queries
-      if (text.includes('hour') || text.includes('open') || text.includes('close') || text.includes('time')) {
-        return res.json({
-          success: true,
-          sessionId: currentSessionId,
-          message: "Our library hours are: Monday - Friday: 8:00 AM - 6:00 PM; Saturday: 9:00 AM - 4:00 PM; Sunday: Closed. During exam periods, hours may be extended.",
-          toolCallsExecuted: 0,
-          iterations: 0
-        });
-      }
 
-      // If user likely asks for rules/policies, try DB fallback
-      if (text.includes('rule') || text.includes('policy') || text.includes('penalty')) {
-        try {
-          const rules = await executeTool('get_library_rules', {});
-          if (rules && rules.success && rules.rules && rules.rules.length > 0) {
-            const summary = rules.rules.slice(0, 5).map(r => `- ${r.rule_title}: ${r.rule_description}`).join('\n');
-            return res.json({ success: true, sessionId: currentSessionId, message: `Library rules (top results):\n${summary}` });
-          }
-        } catch (err) {
-          // fall through to default offline message
-        }
-      }
+    // Process message with rule-based chatbot
+    const response = await ruleBasedChatbot.processMessage(message, context);
 
-      // Default fallback: return top FAQs from DB
-      try {
-        const faqs = await executeTool('get_faqs', { category: 'all' });
-        if (faqs && faqs.success) {
-          const top = faqs.faqs.slice(0, 5).map(f => `Q: ${f.question}\nA: ${f.answer}`).join('\n\n');
-          return res.json({ success: true, sessionId: currentSessionId, message: `I'm currently offline (AI unavailable). Here are some helpful FAQs:\n\n${top}` });
-        }
-      } catch (err) {
-        // final fallback
-      }
-
-      return res.status(503).json({ success: false, error: 'AI service unavailable. Please try again later.' });
+    // Store in session history
+    if (!sessions.has(currentSessionId)) {
+      sessions.set(currentSessionId, []);
     }
-
-    // Process message with AI router
-    const response = await aiRouter.processMessage(
-      message,
-      currentSessionId,
-      context
-    );
+    const history = sessions.get(currentSessionId);
+    history.push({
+      role: 'user',
+      content: message,
+      timestamp: new Date()
+    });
+    history.push({
+      role: 'assistant',
+      content: response.message,
+      timestamp: new Date(),
+      intent: response.intent,
+      toolUsed: response.toolUsed
+    });
 
     res.json({
-      ...response,
-      sessionId: currentSessionId
+      success: true,
+      sessionId: currentSessionId,
+      message: response.message,
+      intent: response.intent,
+      toolUsed: response.toolUsed
     });
   } catch (error) {
     console.error('Error in /chat endpoint:', error);
@@ -99,6 +81,7 @@ router.post('/chat', async (req, res) => {
 /**
  * POST /api/chatbot/chat/stream
  * Send a message and receive streaming response (SSE)
+ * For rule-based chatbot, we send the complete response immediately
  */
 router.post('/chat/stream', async (req, res) => {
   try {
@@ -116,7 +99,7 @@ router.post('/chat/stream', async (req, res) => {
     res.setHeader('Cache-Control', 'no-cache');
     res.setHeader('Connection', 'keep-alive');
 
-    const currentSessionId = sessionId || aiRouter.generateSessionId(userId || 'anonymous');
+    const currentSessionId = sessionId || generateSessionId(userId || 'anonymous');
 
     const context = {
       userId: userId || null,
@@ -127,24 +110,31 @@ router.post('/chat/stream', async (req, res) => {
     // Send session ID first
     res.write(`data: ${JSON.stringify({ type: 'session', sessionId: currentSessionId })}\n\n`);
 
-    // If Ollama not available, send a single fallback chunk and close
-    if (!ollamaService.available) {
-      const offlineMsg = { type: 'content', content: "AI service is currently unavailable. Please try again later. Meanwhile, you can view FAQs in the app settings." };
-      res.write(`data: ${JSON.stringify(offlineMsg)}\n\n`);
-      res.write('data: [DONE]\n\n');
-      return res.end();
+    // Process message with rule-based chatbot
+    const response = await ruleBasedChatbot.processMessage(message, context);
+
+    // Store in session history
+    if (!sessions.has(currentSessionId)) {
+      sessions.set(currentSessionId, []);
     }
+    const history = sessions.get(currentSessionId);
+    history.push({
+      role: 'user',
+      content: message,
+      timestamp: new Date()
+    });
+    history.push({
+      role: 'assistant',
+      content: response.message,
+      timestamp: new Date(),
+      intent: response.intent,
+      toolUsed: response.toolUsed
+    });
 
-    // Stream response
-    await aiRouter.processMessageStream(
-      message,
-      currentSessionId,
-      context,
-      (chunk) => {
-        res.write(`data: ${JSON.stringify(chunk)}\n\n`);
-      }
-    );
-
+    // Send the complete response as a single content chunk
+    res.write(`data: ${JSON.stringify({ type: 'content', content: response.message })}\n\n`);
+    
+    // Send done signal
     res.write('data: [DONE]\n\n');
     res.end();
   } catch (error) {
@@ -172,7 +162,7 @@ router.get('/history/:sessionId', async (req, res) => {
       });
     }
 
-    const history = aiRouter.getHistory(sessionId);
+    const history = sessions.get(sessionId) || [];
 
     res.json({
       success: true,
@@ -204,7 +194,7 @@ router.delete('/history/:sessionId', async (req, res) => {
       });
     }
 
-    aiRouter.clearHistory(sessionId);
+    sessions.delete(sessionId);
 
     res.json({
       success: true,
@@ -226,25 +216,26 @@ router.delete('/history/:sessionId', async (req, res) => {
  */
 router.get('/status', async (req, res) => {
   try {
-    if (!ollamaService.available) {
-      return res.status(200).json({ success: false, status: 'offline', service: 'Ollama', message: 'Ollama is not reachable. Ensure `ollama serve` is running on the host configured in OLLAMA_HOST.' });
-    }
-
-    const models = await ollamaService.listModels();
-    
     res.json({
       success: true,
       status: 'online',
-      service: 'Ollama',
-      availableModels: models.map(m => m.name),
-      currentModel: ollamaService.defaultModel
+      service: 'Rule-Based Chatbot',
+      type: 'pattern-matching',
+      features: [
+        'Book search',
+        'Research paper search',
+        'Library hours',
+        'FAQs',
+        'Borrowing/Return info',
+        'Recommendations'
+      ]
     });
   } catch (error) {
     console.error('Error checking status:', error);
-    res.status(503).json({
+    res.status(500).json({
       success: false,
-      status: 'offline',
-      error: 'Chatbot service is unavailable. Please ensure Ollama is running.'
+      status: 'error',
+      error: 'Failed to check chatbot status'
     });
   }
 });
@@ -256,7 +247,7 @@ router.get('/status', async (req, res) => {
 router.post('/generate-session', (req, res) => {
   try {
     const { userId } = req.body;
-    const sessionId = aiRouter.generateSessionId(userId || 'anonymous');
+    const sessionId = generateSessionId(userId || 'anonymous');
 
     res.json({
       success: true,
@@ -272,66 +263,3 @@ router.post('/generate-session', (req, res) => {
 });
 
 module.exports = router;
-
-/**
- * Proxy endpoint to forward requests to an internal HTTP-only chatbot service.
- * This is useful when the frontend is served over HTTPS and cannot call HTTP
- * endpoints directly (mixed-content blocked by browsers). Configure the
- * internal target with the env var `CHATBOT_INTERNAL_URL` (default: http://127.0.0.1:3002).
- */
-const INTERNAL_CHATBOT = process.env.CHATBOT_INTERNAL_URL || 'http://127.0.0.1:3002';
-
-// Add a catch-all proxy route mounted under /api/chatbot/proxy/*
-router.all('/proxy/*', async (req, res) => {
-  try {
-    const forwardPath = req.path.replace(/^\/proxy/, '') || '/';
-    const targetUrl = INTERNAL_CHATBOT.replace(/\/$/, '') + forwardPath;
-
-    // Diagnostic log to help debug proxying on the server
-    try {
-      console.info(`Chatbot proxy -> ${req.method} ${req.originalUrl} -> ${targetUrl}`);
-    } catch (e) {}
-
-    // Build headers to forward (omit host to allow axios to set correct host)
-    const forwardHeaders = { ...req.headers };
-    delete forwardHeaders.host;
-
-    // Use stream response for streaming endpoints
-    const axiosConfig = {
-      method: req.method,
-      url: targetUrl,
-      headers: forwardHeaders,
-      responseType: 'stream',
-      validateStatus: () => true
-    };
-
-    // For non-GET/HEAD methods, forward body
-    if (req.method !== 'GET' && req.method !== 'HEAD') {
-      axiosConfig.data = req.body;
-    }
-
-    const upstream = await axios(axiosConfig);
-
-    try {
-      console.info(`Chatbot proxy upstream responded: ${upstream.status} ${upstream.statusText || ''} for ${targetUrl}`);
-    } catch (e) {}
-
-    // Forward status and headers
-    res.status(upstream.status);
-    Object.entries(upstream.headers || {}).forEach(([k, v]) => {
-      // Don't override transfer-encoding on the response
-      if (k.toLowerCase() === 'transfer-encoding') return;
-      res.setHeader(k, v);
-    });
-
-    // Pipe the upstream response stream to client
-    upstream.data.on('error', (err) => {
-      console.error('Error piping upstream stream:', err);
-      try { res.end(); } catch (e) {}
-    });
-    upstream.data.pipe(res);
-  } catch (err) {
-    console.error('Proxy to internal chatbot failed:', err.message || err);
-    res.status(502).json({ success: false, error: 'Proxy failed', details: err.message || String(err) });
-  }
-});
