@@ -249,8 +249,7 @@ router.get("/notifications", async (req, res) => {
       WHERE t.transaction_type = 'borrow' 
         AND t.due_date IS NOT NULL
         AND t.status != 'Returned'
-        AND DATEDIFF(STR_TO_DATE(t.due_date, '%Y-%m-%d'), CURDATE()) <= 1
-        AND (p.status IS NULL OR p.status != 'Waived')
+        AND (p.status IS NULL OR (p.status != 'Paid' AND p.status != 'Waived'))
       ORDER BY days_remaining ASC, t.transaction_date DESC`
     );
 

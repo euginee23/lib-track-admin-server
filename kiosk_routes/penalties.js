@@ -692,7 +692,7 @@ router.get("/summary", async (req, res) => {
     const [totalResult] = await pool.execute(
       `SELECT 
          COUNT(*) as total_penalties, 
-         SUM(fine) as total_fines
+         SUM(fine + IFNULL(book_price, 0)) as total_fines
        FROM penalties p1
        WHERE (p1.status != 'Paid' AND p1.status != 'Waived' OR p1.status IS NULL)
          AND p1.penalty_id IN (
@@ -708,7 +708,7 @@ router.get("/summary", async (req, res) => {
     const [overdueResult] = await pool.execute(
       `SELECT 
          COUNT(*) as overdue_count, 
-         SUM(p.fine) as overdue_fines
+         SUM(p.fine + IFNULL(p.book_price, 0)) as overdue_fines
        FROM penalties p
        LEFT JOIN transactions t ON p.transaction_id = t.transaction_id
        WHERE (p.status != 'Paid' AND p.status != 'Waived' OR p.status IS NULL)
@@ -731,7 +731,7 @@ router.get("/summary", async (req, res) => {
 
     // Get totals for paid penalties so UI can show collected amounts
     const [paidResult] = await pool.execute(
-      `SELECT COUNT(*) as paid_count, SUM(fine) as paid_fines
+      `SELECT COUNT(*) as paid_count, SUM(fine + IFNULL(book_price, 0)) as paid_fines
        FROM penalties
        WHERE status = 'Paid'`
     );
