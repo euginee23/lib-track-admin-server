@@ -319,7 +319,9 @@ router.get("/", async (req, res) => {
           WHEN t.status = 'Returned' AND t.return_date IS NOT NULL THEN DATEDIFF(STR_TO_DATE(t.return_date, '%Y-%m-%d'), STR_TO_DATE(t.due_date, '%Y-%m-%d'))
           ELSE DATEDIFF(CURDATE(), STR_TO_DATE(t.due_date, '%Y-%m-%d'))
         END as days_overdue,
-        p.status
+        p.status,
+        p.penalty_type,
+        p.book_price
       FROM penalties p
       LEFT JOIN transactions t ON p.transaction_id = t.transaction_id
       LEFT JOIN users u ON p.user_id = u.user_id
@@ -692,11 +694,11 @@ router.get("/summary", async (req, res) => {
          COUNT(*) as total_penalties, 
          SUM(fine) as total_fines
        FROM penalties p1
-       WHERE (p1.status != 'Paid' OR p1.status IS NULL)
+       WHERE (p1.status != 'Paid' AND p1.status != 'Waived' OR p1.status IS NULL)
          AND p1.penalty_id IN (
            SELECT MAX(p2.penalty_id) 
            FROM penalties p2 
-           WHERE (p2.status != 'Paid' OR p2.status IS NULL)
+           WHERE (p2.status != 'Paid' AND p2.status != 'Waived' OR p2.status IS NULL)
            GROUP BY p2.transaction_id, p2.user_id
          )`
     );
@@ -771,7 +773,9 @@ router.put("/:penalty_id/pay", async (req, res) => {
         t.reference_number,
         CONCAT(u.first_name, ' ', u.last_name) as user_name,
         b.book_title,
-        rp.research_title
+        rp.research_title,
+        p.penalty_type,
+        p.book_price
        FROM penalties p
        LEFT JOIN transactions t ON p.transaction_id = t.transaction_id
        LEFT JOIN users u ON p.user_id = u.user_id
@@ -789,6 +793,10 @@ router.put("/:penalty_id/pay", async (req, res) => {
     }
 
     const penalty = penaltyDetails[0];
+
+    // Calculate total amount including book price for lost/damaged penalties
+    const bookPrice = (penalty.penalty_type === 'lost_damaged' && penalty.book_price) ? parseFloat(penalty.book_price) : 0;
+    const totalAmount = parseFloat(penalty.fine) + bookPrice;
 
     // Check if penalty is already paid or waived
     if (penalty.status === 'Paid') {
@@ -832,12 +840,22 @@ router.put("/:penalty_id/pay", async (req, res) => {
 
     // SEND USER NOTIFICATION VIA WEBSOCKET
     if (wsServer && wsServer.io) {
+      const itemTitle = penalty.book_title || penalty.research_title || 'item';
+      let notificationMessage = `Your penalty of ₱${penalty.fine.toFixed(2)}`;
+      
+      // Add book price information for lost/damaged penalties
+      if (penalty.penalty_type === 'lost_damaged' && bookPrice > 0) {
+        notificationMessage += ` plus book replacement fee of ₱${bookPrice.toFixed(2)} (Total: ₱${totalAmount.toFixed(2)})`;
+      }
+      
+      notificationMessage += ` for ${itemTitle} (Ref: ${penalty.reference_number}) has been marked as paid. Thank you!`;
+
       wsServer.io.emit('user_notification', {
         user_id: penalty.user_id,
         type: 'penalty_paid',
         title: 'Penalty Payment Received',
-        message: `Your penalty of ₱${penalty.fine.toFixed(2)} for ${penalty.book_title || penalty.research_title || 'item'} (Ref: ${penalty.reference_number}) has been marked as paid. Thank you!`,
-        fine_amount: penalty.fine,
+        message: notificationMessage,
+        fine_amount: totalAmount,
         reference_number: penalty.reference_number,
         timestamp: new Date().toISOString(),
         priority: 'medium'
@@ -855,6 +873,9 @@ router.put("/:penalty_id/pay", async (req, res) => {
           transaction_id: penalty.transaction_id,
           reference_number: penalty.reference_number,
           fine_amount: penalty.fine,
+          book_price: bookPrice,
+          total_amount: totalAmount,
+          penalty_type: penalty.penalty_type,
           payment_method,
           item_title: penalty.book_title || penalty.research_title || 'Unknown Item',
           paid_at: new Date().toISOString()
@@ -868,7 +889,7 @@ router.put("/:penalty_id/pay", async (req, res) => {
       await logPayment({
         user_id: penalty.user_id,
         action: 'PENALTY_PAID',
-        amount: penalty.fine,
+        amount: totalAmount,
         reference_number: penalty.reference_number,
         penalty_id: penalty_id,
         admin_id: admin_id || null,
@@ -887,6 +908,9 @@ router.put("/:penalty_id/pay", async (req, res) => {
         user_id: penalty.user_id,
         user_name: penalty.user_name,
         fine_amount: penalty.fine,
+        book_price: bookPrice,
+        total_amount: totalAmount,
+        penalty_type: penalty.penalty_type,
         payment_method,
         paid_at: new Date().toISOString(),
       },
@@ -1195,9 +1219,12 @@ router.post("/mark-as-lost", async (req, res) => {
         if (result.penalty_id) {
           await pool.execute(
             `UPDATE penalties 
-             SET waive_reason = ?, updated_at = NOW() 
+             SET penalty_type = 'lost_damaged',
+                 book_price = ?,
+                 waive_reason = ?, 
+                 updated_at = NOW() 
              WHERE penalty_id = ?`,
-            [`Lost/Damaged - Book replacement fee: ₱${bookPrice.toFixed(2)}${overdueFine > 0 ? `, Overdue fine: ₱${overdueFine.toFixed(2)}` : ''}`, result.penalty_id]
+            [bookPrice, `Lost/Damaged - Book replacement fee: ₱${bookPrice.toFixed(2)}${overdueFine > 0 ? `, Overdue fine: ₱${overdueFine.toFixed(2)}` : ''}`, result.penalty_id]
           );
         }
         

@@ -56,7 +56,9 @@ router.get("/", async (req, res) => {
         rp.research_abstract,
         rd.department_name as research_department,
         p.status as penalty_status,
-        p.fine as penalty_fine
+        p.fine as penalty_fine,
+        p.book_price as penalty_book_price,
+        p.penalty_type
       FROM transactions t
       LEFT JOIN users u ON t.user_id = u.user_id
       LEFT JOIN departments d ON u.department_id = d.department_id
@@ -67,7 +69,7 @@ router.get("/", async (req, res) => {
       LEFT JOIN research_papers rp ON t.research_paper_id = rp.research_paper_id
       LEFT JOIN departments rd ON rp.department_id = rd.department_id
       LEFT JOIN (
-        SELECT p1.transaction_id, p1.user_id, p1.status, p1.fine
+        SELECT p1.transaction_id, p1.user_id, p1.status, p1.fine, p1.book_price, p1.penalty_type
         FROM penalties p1
         INNER JOIN (
           SELECT transaction_id, user_id, MAX(penalty_id) as max_penalty_id
